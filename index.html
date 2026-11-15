@@ -1547,7 +1547,136 @@ draw = function () {
 };
 // ================= END POWER GRID DAMAGE =================
 
-// ================= TRAINER GUIDE (paste below the DONKI block, above "let last = performance.now();") =================
+  // ================= HOW TO PLAY TUTORIAL (paste ABOVE the "TRAINER GUIDE" block) =================
+const TUT = { open: false, page: 0, seen: false };
+try { TUT.seen = localStorage.getItem('tutSeen') === '1'; } catch (e) {}
+
+const TUT_TABS = ['Basics', 'Outside', 'Food', 'House', 'Dangers'];
+const TUT_PAGES = [
+  [
+    { h: 'Goal', t: 'Survive on Mars. Every day: finish your tasks, eat, and keep your energy and oxygen up.' },
+    { h: 'Move', t: 'Arrow keys or W A S D. Click an object to use it when you are standing close to it.' },
+    { h: 'Weather app', t: 'Click the icon at the bottom left (or press R). Tabs: Weather, Tasks, Warning, Keys.' },
+    { h: 'Labels', t: 'Press I to outline and name everything you can use. Press I again to hide them.' },
+    { h: 'Help', t: 'T opens this tutorial. H opens the Trainer Guide, which explains the science.' }
+  ],
+  [
+    { h: 'Greenhouse', t: 'The dome on the left. Walk into its door at the bottom to go inside.' },
+    { h: 'House', t: 'The big building on the right. Walk into its door at the bottom to go inside.' },
+    { h: 'Solar panels', t: 'Top right. Click them (stand close) to check output. They charge your energy.' },
+    { h: 'Power cords', t: 'Cords link the panels to the house. A CME or dust storm snaps them if you do not store energy.' },
+    { h: 'Space suit', t: 'You wear it outside and take it off inside the house. Walk off the bottom edge of a room to leave it.' }
+  ],
+  [
+    { h: 'Pick crops', t: 'In the greenhouse, click a plant that shows 100% to pick it. Your basket holds 5.' },
+    { h: 'Bin', t: 'In the house, click the bin to empty your basket into it. Picked food rots, so check the days.' },
+    { h: 'Rotting', t: 'Lettuce lasts 3 days, tomato 2, sweet potato 8. A cooked meal lasts 2 days.' },
+    { h: 'Kitchen', t: 'Click the kitchen counter. Cook a recipe (costs 3% energy) or Eat.' },
+    { h: 'Eating', t: 'Each day eat 1 cooked meal or 2 raw crops. Skip two days in a row and you starve.' }
+  ],
+  [
+    { h: 'Oxygen tank', t: 'The small tank, top left. Click it to refill (5 seconds, 4% energy). Do it every day.' },
+    { h: 'Energy storage', t: 'The big tank on the left. Click it to store energy and STOP the solar panels.' },
+    { h: 'Restart panels', t: 'Click the big tank again when it is safe. Stopped panels drain energy fast and nothing recharges.' },
+    { h: 'Bed', t: 'Walk up to the bed and answer Yes to sleep. A new day starts and your plants grow.' },
+    { h: 'Bin and kitchen', t: 'The bin is on the right side of the room. The kitchen counter is at the bottom right.' }
+  ],
+  [
+    { h: 'Solar flare', t: 'Go inside the house before the timer ends, then stay inside until it is over.' },
+    { h: 'CME', t: 'Pick all ripe crops, go inside, and store energy (stop the panels). Restart them afterwards.' },
+    { h: 'Dust storm', t: 'Pick crops, store energy, click the panels to attach the dust shield, fix the ! marks.' },
+    { h: 'Energy', t: 'Solar power charges it and the base uses 3% every hour. At 0% the mission ends.' },
+    { h: 'Oxygen', t: 'If you have not refilled it after about 1 minute, you get 10 seconds to do it.' }
+  ]
+];
+
+const TX = 130, TY = 24, TW = 700, TH = 492;
+const tutBtn = { x: 12, y: 84, w: 150, h: 30 };
+function tutTabRect(i) { return { x: TX + 20 + i * 135, y: TY + 54, w: 128, h: 32 }; }
+function tutCloseRect() { return { x: TX + TW - 42, y: TY + 10, w: 30, h: 30 }; }
+function tutBtnVisible() {
+  return !gameOver && !dash.open && !TUT.open && !guide.open && !dayOver && !ask && !(ev && (ev.waiting || ev.phase === 'done'));
+}
+function openTut() { TUT.open = true; TUT.seen = true; try { localStorage.setItem('tutSeen', '1'); } catch (e) {} }
+
+function drawTut() {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, 960, 540);
+  panel(TX, TY, TW, TH);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#3b2412';
+  ctx.font = 'bold 22px "Courier New", monospace';
+  ctx.fillText('How to Play', TX + 22, TY + 30);
+  const c = tutCloseRect();
+  ctx.fillStyle = '#c8402a'; ctx.fillRect(c.x, c.y, c.w, c.h);
+  ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(c.x, c.y, c.w, c.h);
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = 'bold 18px Arial';
+  ctx.fillText('X', c.x + c.w / 2, c.y + c.h / 2 + 1);
+  TUT_TABS.forEach((name, i) => {
+    const r = tutTabRect(i);
+    ctx.fillStyle = TUT.page === i ? '#6a9a1f' : '#f3e3c3'; ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = TUT.page === i ? '#1d2a05' : '#3b2412'; ctx.font = 'bold 14px "Courier New", monospace';
+    ctx.fillText(name, r.x + r.w / 2, r.y + r.h / 2);
+  });
+  let y = TY + 114;
+  ctx.textAlign = 'left';
+  TUT_PAGES[TUT.page].forEach(s => {
+    ctx.font = 'bold 16px "Courier New", monospace'; ctx.fillStyle = '#7a3a14';
+    ctx.fillText(s.h, TX + 24, y); y += 22;
+    ctx.font = '14px "Courier New", monospace'; ctx.fillStyle = '#3b2412';
+    wrapLines([{ text: s.t }], TW - 48).forEach(l => { ctx.fillText(l.text, TX + 24, y); y += 19; });
+    y += 12;
+  });
+  ctx.textAlign = 'center'; ctx.fillStyle = '#6b4a2a'; ctx.font = 'italic 12px "Courier New", monospace';
+  ctx.fillText('Page ' + (TUT.page + 1) + ' of ' + TUT_PAGES.length + '. Left / Right arrows change page. T, Esc or X closes.', TX + TW / 2, TY + TH - 16);
+}
+
+function drawTutBtn() {
+  panel(tutBtn.x, tutBtn.y, tutBtn.w, tutBtn.h);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#3b2412';
+  ctx.font = 'bold 14px "Courier New", monospace';
+  ctx.fillText('How to play (T)', tutBtn.x + tutBtn.w / 2, tutBtn.y + tutBtn.h / 2);
+}
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (TUT.open) {
+    if (k === 't' || k === 'escape') TUT.open = false;
+    if (k === 'arrowleft' || k === 'a') TUT.page = (TUT.page + TUT_PAGES.length - 1) % TUT_PAGES.length;
+    if (k === 'arrowright' || k === 'd') TUT.page = (TUT.page + 1) % TUT_PAGES.length;
+    e.stopImmediatePropagation(); e.preventDefault();
+    return;
+  }
+  if (k === 't' && !gameOver && !dash.open && !dayOver && !guide.open) { openTut(); e.stopImmediatePropagation(); }
+}, true);
+
+window.addEventListener('click', e => {
+  if (e.target !== canvas) return;
+  const p = canvasPoint(e);
+  if (TUT.open) {
+    if (inRect(p, tutCloseRect())) TUT.open = false;
+    TUT_TABS.forEach((n, i) => { if (inRect(p, tutTabRect(i))) TUT.page = i; });
+    e.stopImmediatePropagation();
+    return;
+  }
+  if (tutBtnVisible() && inRect(p, tutBtn)) { openTut(); e.stopImmediatePropagation(); }
+}, true);
+
+const _updateTut = update;
+update = function (dt) {
+  if (!TUT.seen && !TUT.open && !dash.open && !guide.open && !gameOver) openTut();   // opens once, the first time you start
+  if (TUT.open) return;
+  _updateTut(dt);
+};
+
+const _drawTut = draw;
+draw = function () {
+  _drawTut();
+  if (TUT.open) drawTut();
+  else if (tutBtnVisible()) drawTutBtn();
+};
+// ================= END HOW TO PLAY TUTORIAL =================
+
+// ================= TRAINER GUIDE =================
 const guide = { open: false, page: 0 };
 const GUIDE_TABS = ['Solar flare', 'CME', 'Dust storm', 'Words to know'];
 
