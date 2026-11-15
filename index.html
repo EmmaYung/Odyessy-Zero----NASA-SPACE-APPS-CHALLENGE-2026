@@ -1,0 +1,1608 @@
+<!DOCTYPE html>
+<html>
+<body style="margin:0;background:#10152b;overflow:hidden">
+<canvas id="game" width="960" height="540" style="position:absolute;inset:0;margin:auto;display:block;width:min(100vw, 177.78vh);height:min(100vh, 56.25vw);background:#bb4a2a"></canvas>
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+ctx.imageSmoothingEnabled = true;
+ctx.imageSmoothingQuality = 'high';
+
+const sprites = {};
+['front', 'back', 'side', 'Afront', 'Aback', 'Aside'].forEach(name => {
+  sprites[name] = new Image();
+  sprites[name].src = name + '.png';
+  sprites[name].onerror = () => console.log('Could not load ' + name + '.png');
+});
+
+const bg = new Image();
+bg.src = 'map.png';
+bg.onerror = () => console.log('Could not load map.png');
+
+// ---- GREENHOUSE (new) ----
+const soilImg = new Image();
+soilImg.src = 'soil.png';   // your soil background
+soilImg.onerror = () => console.log('Could not load soil.png');
+
+// src = [sx, sy, sw, sh] crops the sprite out of its image (lettuce.png has a lot of empty space around it).
+// w = how wide it is drawn on the 960x540 canvas.
+const vegTypes = {
+  lettuce:     { file: 'lettuce.png',     src: [12, 179, 48, 35], w: 50, name: 'lettuce', days: 40 },
+  sweetpotato: { file: 'sweetpotato.png', src: [0, 0, 32, 29],    w: 40, name: 'sweet potato', days: 100 },
+  tomato:      { file: 'tomato.png',      src: [0, 0, 36, 34],    w: 40, name: 'tomato', days: 80 }
+};
+Object.values(vegTypes).forEach(v => {
+  v.img = new Image();
+  v.img.src = v.file;
+  v.img.onerror = () => console.log('Could not load ' + v.file);
+});
+
+// Planted vegetables: x, y are canvas coordinates (center of the sprite). Add or move them here.
+// age = days the plant has already been growing (change these to whatever you like; use 0 for a brand new seed)
+const plants = [
+  { t: 'tomato', x: 115, y: 119, age: 40 },      { t: 'lettuce', x: 288, y: 76, age: 40 },
+  { t: 'sweetpotato', x: 528, y: 108, age: 99 }, { t: 'tomato', x: 749, y: 184, age: 80 },
+  { t: 'lettuce', x: 864, y: 97, age: 39 },      { t: 'sweetpotato', x: 192, y: 281, age: 100 },
+  { t: 'tomato', x: 422, y: 248, age: 20 },      { t: 'lettuce', x: 634, y: 313, age: 30 },
+  { t: 'sweetpotato', x: 845, y: 335, age: 60 }, { t: 'tomato', x: 134, y: 443, age: 64 },
+  { t: 'lettuce', x: 365, y: 421, age: 38 },     { t: 'sweetpotato', x: 557, y: 464, age: 10 },
+  { t: 'tomato', x: 768, y: 454, age: 8 }
+];
+const MUST_BE_RIPE = true;   // true = you can only pick a vegetable at 100%
+function growth(pl) { return Math.min(1, pl.age / vegTypes[pl.t].days); }   // 0 to 1
+
+// ---- EVENTS (solar flare / CME) ----
+const events = [
+  { day: 500, hour: 1, type: 'flare' },   // 9 AM (hour 0 = 8 AM)
+  { day: 501, hour: 2, type: 'cme' }      // 10 AM
+];
+const FLARE_SECONDS = 10, CME_SECONDS = 45;
+let ev = null, gameOver = false, solarDead = false;
+const warnImg = new Image(); warnImg.src = 'warning.png';
+warnImg.onerror = () => console.log('Could not load warning.png');
+const deadImgs = {};
+Object.keys(vegTypes).forEach(k => {
+  deadImgs[k] = new Image(); deadImgs[k].src = 'dead_' + k + '.png';
+  deadImgs[k].onerror = () => console.log('Could not load dead_' + k + '.png');
+});
+
+// one dashboard picture per day: dashboard500.png, dashboard501.png ... (falls back to dashboard.png)
+const dayDashImgs = {};
+function dashImageNow() {
+  if (!(day in dayDashImgs)) { const i = new Image(); i.src = 'dashboard' + day + '.png'; dayDashImgs[day] = i; }
+  const i = dayDashImgs[day];
+  return i.complete && i.naturalWidth ? i : dashImg;
+}
+
+// The NASA app pictures may still be full 1280x720 screenshots with a white margin.
+// If so, only the app part is cut out ([x, y, w, h] below), so they come out the same size as the app at the start.
+const APP_CROP = [450, 74, 407, 432];
+function drawAppPicture(img, r) {
+  const full = img.naturalWidth === 1280 && img.naturalHeight === 720;
+  if (full) ctx.drawImage(img, APP_CROP[0], APP_CROP[1], APP_CROP[2], APP_CROP[3], r.x, r.y, r.w, r.h);
+  else ctx.drawImage(img, r.x, r.y, r.w, r.h);
+}
+function mmss(s) { return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function cropsLeft() { return ev.targets.filter(p => plants.includes(p) && !p.dead).length; }
+const FLARE_STAY = 30, CME_STAY = 60;   // seconds you must stay inside after the first timer
+function evPaused() { return ev && (ev.waiting || ev.phase === 'done'); }
+function eventLines() {
+  if (!ev) return [];
+  const inH = scene === 'house', s = Math.max(0, Math.ceil(ev.t));
+  if (ev.phase === 'stay') return [
+    { text: ev.type === 'flare' ? 'The solar flare is still happening.' : 'The CME is still happening.' },
+    { text: 'Stay inside your house for ' + mmss(s) + '.' },
+    { text: 'Do not go outside!' }];
+  if (ev.type === 'flare') return [
+    { text: 'A solar flare is occurring.' },
+    { text: 'You have ' + s + ' seconds to:' },
+    { text: 'Go inside your house', done: inH }];
+  const left = cropsLeft();
+  return [
+    { text: 'A CME is occurring.' },
+    { text: 'You have ' + mmss(s) + ' to:' },
+    { text: '1. Collect all ripe crops (' + left + ' left)', done: left === 0 },
+    { text: '2. Go inside your house', done: inH },
+    { text: '3. Store energy / stop solar panels', done: solarStopped }];
+}
+function startEvent(e) {
+  e.fired = true; ask = null;
+  // waiting = the warning is on screen; the timer only starts once you close it with the red button
+  ev = { type: e.type, phase: 'go', waiting: true, t: e.type === 'flare' ? FLARE_SECONDS : CME_SECONDS,
+         targets: e.type === 'cme' ? plants.filter(p => !p.dead && growth(p) >= 1) : [], result: [] };
+}
+function finishGoPhase() {   // the "get inside" timer is over: apply the results, then start the "stay inside" timer
+  if (ev.type === 'cme') {
+    let n = 0;
+    ev.targets.forEach(p => { if (plants.includes(p) && !p.dead) { p.dead = true; n++; } });
+    ev.result.push(n ? n + ' crop' + (n > 1 ? 's' : '') + ' died.' : 'All ripe crops were saved.');
+    if (!solarStopped) { solarDead = true; ev.result.push('The solar panels are dead.'); }
+    else ev.result.push('The solar panels were protected.');
+  } else ev.result.push('You got inside in time.');
+  ev.phase = 'stay';
+  ev.t = ev.type === 'flare' ? FLARE_STAY : CME_STAY;
+}
+function updateEvent(dt) {
+  ev.t -= dt;
+  const inH = scene === 'house';
+  if (ev.phase === 'go') {
+    const ready = inH && (ev.type === 'flare' || (cropsLeft() === 0 && solarStopped));
+    if (ready) finishGoPhase();
+    else if (ev.t <= 0) { if (!inH) { endGame('You were caught outside.'); return; } finishGoPhase(); }
+  } else if (ev.phase === 'stay') {
+    if (!inH) { endGame('You were caught outside.'); return; }
+    if (ev.t <= 0) ev.phase = 'done';
+  }
+}
+function drawEvent() {
+  if (!ev) return;
+  if (ev.waiting || ev.phase === 'done') { ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+  if (ev.waiting) {   // the warning pops up at the same size as the NASA app
+    const r = dashRect();
+    if (warnImg.naturalWidth) drawAppPicture(warnImg, r);
+    else { ctx.fillStyle = '#b82424'; ctx.fillRect(r.x, r.y, r.w, r.h); }
+    drawTextArea(r, eventLines(), { top: 170, color: '#ffffff', done: '#ffd0d0' });
+    return;
+  }
+  if (ev.phase === 'done') {
+    const lines = ev.result, h = 110 + lines.length * 26;
+    panel(220, 270 - h / 2, 520, h);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#3b2412';
+    ctx.font = 'bold 22px "Courier New", monospace';
+    ctx.fillText('The ' + (ev.type === 'flare' ? 'solar flare' : 'CME') + ' has finished.', 480, 270 - h / 2 + 32);
+    ctx.font = 'bold 15px "Courier New", monospace';
+    lines.forEach((l, i) => ctx.fillText(l, 480, 270 - h / 2 + 66 + i * 26));
+    ctx.fillText('Click or press Enter to continue', 480, 270 + h / 2 - 22);
+    return;
+  }
+  const s = Math.max(0, Math.ceil(ev.t));
+  ctx.fillStyle = Math.floor(ev.t * 2) % 2 ? '#b82424' : '#7a1010';
+  ctx.fillRect(330, 12, 300, 30);
+  ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(330, 12, 300, 30);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText((ev.phase === 'stay' ? 'STAY INSIDE ' : ev.type === 'flare' ? 'SOLAR FLARE ' : 'CME ') + mmss(s), 480, 28);
+}
+function drawDeadPlant(pl) {
+  const v = vegTypes[pl.t], im = deadImgs[pl.t];
+  if (!im.complete || !im.naturalWidth) return;
+  const base = pl.y + (v.w * v.src[3] / v.src[2]) / 2, h = v.w * im.naturalHeight / im.naturalWidth;
+  ctx.drawImage(im, pl.x - v.w / 2, base - h, v.w, h);
+  ctx.fillStyle = '#4a2e18'; ctx.fillRect(pl.x - v.w * 0.45, base - 3, v.w * 0.9, 3);
+}
+
+// ---- text that stays inside the app borders (wraps + scrolls) ----
+const TEXT = { x: 44, w: 290, y: 240, h: 138 };   // text area inside the app, in dashboard.png units. Tweak if needed.
+function wrapLines(lines, maxW) {
+  const out = [];
+  lines.forEach(l => {
+    let cur = '';
+    l.text.split(' ').forEach(w => {
+      const t = cur ? cur + ' ' + w : w;
+      if (ctx.measureText(t).width > maxW && cur) { out.push({ text: cur, done: l.done }); cur = w; } else cur = t;
+    });
+    out.push({ text: cur, done: l.done });
+  });
+  return out;
+}
+function drawTextArea(r, lines, o) {
+  o = o || {};
+  const top = o.top || TEXT.y, h = TEXT.y + TEXT.h - top, lh = 24;
+  ctx.save();
+  ctx.font = 'bold ' + 16 * r.sx + 'px "Courier New", monospace';
+  const wrapped = wrapLines(lines, TEXT.w * r.sx);
+  const max = Math.max(0, wrapped.length * lh - h), sc = Math.min(o.scroll || 0, max);
+  ctx.beginPath(); ctx.rect(r.x + TEXT.x * r.sx, r.y + top * r.sy, TEXT.w * r.sx, h * r.sy); ctx.clip();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  wrapped.forEach((l, i) => {
+    const x = r.x + TEXT.x * r.sx, y = r.y + (top + i * lh - sc) * r.sy;
+    ctx.fillStyle = l.done ? (o.done || '#5a6585') : (o.color || '#10152b');
+    ctx.fillText(l.text, x, y);
+    if (l.done) ctx.fillRect(x, y + 8 * r.sy, ctx.measureText(l.text).width, Math.max(2, 2 * r.sy));
+  });
+  ctx.restore();
+  if (max > 0) {   // scroll hints
+    ctx.fillStyle = o.color || '#10152b'; ctx.font = 'bold ' + 14 * r.sx + 'px Arial'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    const hx = r.x + (TEXT.x + TEXT.w) * r.sx;
+    if (sc > 0) ctx.fillText('\u25B2', hx, r.y + (top + 6) * r.sy);
+    if (sc < max) ctx.fillText('\u25BC', hx, r.y + (TEXT.y + TEXT.h - 6) * r.sy);
+  }
+  return sc;
+}
+canvas.addEventListener('wheel', e => {
+  if (dash.open) { dash.scroll = Math.max(0, dash.scroll + Math.sign(e.deltaY) * 24); e.preventDefault(); }
+}, { passive: false });
+
+const REACH = 140;      // how close (px) the character must be to a vegetable to pick it
+let scene = 'outside';  // 'outside' = your map, 'greenhouse' = the soil room, 'house' = inside the house
+let basket = 0;
+let pickedToday = 0;   // task 1 counts the vegetables picked today
+const START_DAY = 500;
+let day = START_DAY;
+// bin and basket hold the crops by type. Every item is stored as the day it was picked, so we know when it rots.
+const bin = { lettuce: [], sweetpotato: [], tomato: [] };
+const basketItems = { lettuce: [], sweetpotato: [], tomato: [] };
+const mealsList = [];       // cooked meals, each stored as the day it was cooked
+let energy = 0;             // energy in storage, 0-100%. Starts at 0 on day 500 and is charged by the solar panels.
+let energyArmed = false;    // becomes true once energy has been above 0, so starting at 0 is not game over
+let gameOverReason = '';
+function endGame(why) { gameOver = true; gameOverReason = why || ''; }
+let lastHour = 0;
+let solarStopped = false;
+let bedArmed = true;
+let showLabels = false;     // press I
+
+// ---- Clock, energy and tasks ----
+const HOUR_SECONDS = 30;      // real seconds per in-game hour
+const GAIN_MAX = 12;          // energy gained per hour at 100% solar capacity (so 60% capacity = 7.2% per hour)
+const DRAIN = 3;              // energy the base uses every hour while the solar panels are running
+const STOPPED_DRAIN = 10;     // energy the base uses every hour while the panels are STOPPED (and nothing recharges)
+const REFILL_COST = 4;        // % energy it costs to refill the oxygen tank
+const COOK_COST = 3;          // % energy it costs to cook one meal
+const OXY_HOURS = 2;          // if the oxygen is not refilled after this many in-game hours...
+const OXY_SECONDS = 10;       // ...you get a low-oxygen alert and this many seconds to refill it
+const SHELF = { lettuce: 3, tomato: 2, sweetpotato: 8 };   // days a picked crop lasts before it rots
+const MEAL_SHELF = 2;         // days a cooked meal lasts before it goes bad
+const DAY_HOURS = 12;         // 8 AM to 8 PM
+const DAY_SECONDS = DAY_HOURS * HOUR_SECONDS;
+function hoursPassed() { return Math.min(DAY_HOURS, Math.floor(gameTime / HOUR_SECONDS)); }
+let gameTime = 0;             // real seconds played so far today
+let dayOver = false;
+// Eating: 1 cooked meal fills you up for the day, a raw crop only fills you half (so you need 2).
+let eatenToday = 0, hungryDays = 0, hungerWarned = false;
+let dayNotes = [];            // messages shown on the Warning tab for today
+let lowEnergyWarned = false, stopRemind = 0;
+const oxy = { alert: false, t: OXY_SECONDS, msg: 0 };
+const tasks = [
+  { text: 'Collect food at the greenhouse', need: 3, done: false },   // done when 3 vegetables are picked
+  { text: 'Check the solar panels',          done: false },            // done when you walk up to the panels
+  { text: 'Refill oxygen at the house',      done: false },            // done when you walk up to the house door
+  { text: 'Eat 1 meal or 2 raw crops',       done: false }             // done when you have eaten enough today
+];
+// Where the character must stand to finish tasks 2 and 3 on map.png: [x, y, width, height]
+const solarZone = [520, 100, 440, 60];
+const houseDoorZone = [757, 455, 91, 35];
+function inBox(b) { return player.x >= b[0] && player.x <= b[0] + b[2] && player.y >= b[1] && player.y <= b[1] + b[3]; }
+
+// ---- food: rotting, eating ----
+function refreshBinFull() { binFull = Object.keys(bin).some(t => bin[t].length > 0) || mealsList.length > 0; }
+function spoilFood() {   // called on a new day: throws away everything that went bad, returns what was lost
+  const lost = [];
+  Object.keys(vegTypes).forEach(t => {
+    let n = 0;
+    [basketItems, bin].forEach(store => {
+      const keep = store[t].filter(d => day - d < SHELF[t]);
+      n += store[t].length - keep.length;
+      store[t] = keep;
+    });
+    if (n) lost.push(n + ' ' + vegTypes[t].name);
+  });
+  const keepM = mealsList.filter(d => day - d < MEAL_SHELF);
+  const nm = mealsList.length - keepM.length;
+  if (nm) lost.push(nm + ' meal' + (nm > 1 ? 's' : ''));
+  mealsList.length = 0; keepM.forEach(d => mealsList.push(d));
+  basket = Object.keys(basketItems).reduce((a, t) => a + basketItems[t].length, 0);
+  refreshBinFull();
+  return lost;
+}
+function leftText(d) { return d <= 1 ? 'rots tomorrow' : 'rots in ' + d + ' days'; }
+function stockLines() {   // what is in the bin, with how long it lasts (based on the oldest item)
+  const out = [];
+  Object.keys(bin).forEach(t => {
+    const a = bin[t];
+    if (a.length) out.push(a.length + ' ' + vegTypes[t].name + ' (' + leftText(SHELF[t] - (day - Math.min.apply(null, a))) + ')');
+  });
+  if (mealsList.length) out.push(mealsList.length + ' meal' + (mealsList.length > 1 ? 's' : '') + ' (' + leftText(MEAL_SHELF - (day - Math.min.apply(null, mealsList))) + ')');
+  return out;
+}
+function soonRot() {   // things in the basket / bin that rot at the start of tomorrow
+  const out = [];
+  Object.keys(vegTypes).forEach(t => {
+    const n = bin[t].concat(basketItems[t]).filter(d => SHELF[t] - (day - d) <= 1).length;
+    if (n) out.push(n + ' ' + vegTypes[t].name);
+  });
+  const m = mealsList.filter(d => MEAL_SHELF - (day - d) <= 1).length;
+  if (m) out.push(m + ' meal' + (m > 1 ? 's' : ''));
+  return out;
+}
+function alertLines() {   // everything the player should know right now (shown on the Warning tab)
+  const L = dayNotes.map(t => ({ text: t }));
+  if (oxy.alert) L.push({ text: 'LOW OXYGEN! Refill the tank at the house in ' + Math.max(0, Math.ceil(oxy.t)) + ' seconds.' });
+  if (eatenToday < 1) L.push({ text: 'You still need to eat today: 1 meal or 2 raw crops.' });
+  const soon = soonRot();
+  if (soon.length) L.push({ text: 'Rots tomorrow: ' + soon.join(', ') + '. Eat or cook it.' });
+  if (solarStopped) L.push({ text: 'Solar panels are stopped. Energy is draining fast!' });
+  if (energy < 25) L.push({ text: 'Low energy: ' + Math.round(energy) + '%.' });
+  return L;
+}
+function newDay() {
+  const hungry = eatenToday < 1;
+  day++; gameTime = 0; dayOver = false; pickedToday = 0; ask = null; refill = null;
+  lastHour = 0; bedArmed = false;
+  ev = null; dash.scroll = 0;
+  oxy.alert = false; oxy.t = OXY_SECONDS; oxy.msg = 0;
+  eatenToday = 0; hungerWarned = false; stopRemind = 0;
+  tasks.forEach(t => t.done = false);
+  plants.forEach(pl => { if (!pl.dead) pl.age = Math.min(vegTypes[pl.t].days, pl.age + 1); });   // every plant grows one day
+  const lost = spoilFood();
+  hungryDays = hungry ? hungryDays + 1 : 0;
+  dayNotes = [];
+  if (hungry) dayNotes.push(hungryDays >= 2 ? 'You starved.' : 'You went to bed hungry! Eat tomorrow or you will starve.');
+  if (lost.length) dayNotes.push('Food rotted: ' + lost.join(', ') + '.');
+  dayNotes.push('Day ' + day + ': your plants grew a little.');
+  toast = { text: dayNotes[0], t: 5 };
+  dash.open = true; dash.tab = (hungry || lost.length) ? 'warning' : null;   // the app pops up again with the new day's info
+  if (hungry && hungryDays >= 2) endGame('You starved.');
+}
+function clockText() {
+  const h24 = 8 + hoursPassed();
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return h12 + ':00 ' + (h24 >= 12 ? 'PM' : 'AM');   // jumps once per hour, minutes are not shown
+}
+let ask = null;         // the yes/no question on screen: { x, y, text, onYes }
+let refill = null;      // { t } while the oxygen tank is refilling
+const BASKET_MAX = 5;   // the basket holds 5 items until you empty it into the bin at the house
+let binFull = false;    // true while something is in the bin
+const REFILL_SECONDS = 5;
+let toast = { text: '', t: 0 };
+
+// Greenhouse walkable box (the character's feet stay inside it).
+const greenhouseWalk = [[40, 130, 880, 380]];
+
+// The greenhouse door (the dome) on map.png: [x, y, width, height]. Walking into it enters the greenhouse.
+// To adjust it: press P, then O, click two corners, press C and paste the printed greenhouseDoor line here.
+let greenhouseDoor = [124, 300, 80, 45];   // the dome's door on map.png (bottom of the door, touching the left path)
+let returnSpot = { x: 410, y: 300 };
+let doorArmed = true;   // after coming out, you must step away from the door before it can trigger again
+
+function enterGreenhouse() {
+  returnSpot = { x: player.x, y: player.y };
+  scene = 'greenhouse'; player.x = 480; player.y = 480; player.view = 'back'; ask = null;
+}
+function exitGreenhouse() {
+  scene = 'outside'; player.x = returnSpot.x; player.y = returnSpot.y; player.view = 'front';
+  player.suit = true;   // space suit back on outside
+  ask = null; doorArmed = false;
+}
+// ---- the house: the character takes off the space suit inside ----
+// Inside pictures (rename here if your files have other names). Empty bin first, bin full of stuff second.
+const houseEmptyImg = new Image(); houseEmptyImg.src = 'empty.png';
+const houseFullImg = new Image();  houseFullImg.src = 'full.png';
+// Rectangles are [x, y, w, h] measured on the 1280x720 picture; sc() turns them into game coordinates.
+function sc(list) { return list.map(r => r.map(v => v * 0.75)); }
+const houseWalk = sc([            // where the light gray floor is
+  [335, 150, 880, 448],           // main room
+  [672, 598, 157, 122],           // corridor to the outside door at the bottom
+  [165, 60, 150, 120],            // floor above the oxygen tank
+  [22, 180, 300, 200],            // floor around the oxygen tank
+  [20, 380, 290, 120],
+  [60, 500, 250, 100],
+  [190, 600, 115, 60],
+  [300, 365, 60, 70]              // opening between the tank area and the main room
+]);
+const houseBlock = sc([           // things you can't walk through
+  [50, 180, 185, 330], [180, 55, 125, 95],   // oxygen tank
+  [315, 78, 20, 285],                         // wall next to the tank
+  [625, 150, 170, 220],                       // table
+  [548, 155, 58, 80], [553, 268, 58, 82], [808, 165, 60, 76], [813, 265, 60, 80],   // chairs
+  [978, 78, 242, 250], [900, 78, 80, 57],     // bed and bedside table
+  [315, 435, 275, 170],                       // bathroom
+  [890, 515, 330, 90],                        // counter
+  [1150, 420, 70, 95],                        // bin
+  [825, 540, 62, 58]                          // plant pot
+]);
+const oxygenRect = sc([[180, 55, 125, 95]])[0];    // the small tank
+const storageRect = sc([[50, 180, 185, 330]])[0];  // the big tank = energy storage
+const binRect = sc([[1150, 420, 70, 95]])[0];
+const bedRect = sc([[978, 78, 242, 250]])[0];
+const bowlRect = sc([[915, 525, 55, 32]])[0];
+const HOUSE_REACH = 95;
+const recipes = [
+  { label: 'fries', name: 'Fries and ketchup', needs: { tomato: 1, sweetpotato: 1 } },
+  { label: 'salad', name: 'Salad', needs: { lettuce: 2, tomato: 1 } }
+];
+function inList(list, x, y) { return list.some(r => x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]); }
+function nearRect(r, d) {
+  const cx = player.x, cy = player.y - player.h / 2;
+  return Math.hypot(Math.max(r[0] - cx, 0, cx - (r[0] + r[2])), Math.max(r[1] - cy, 0, cy - (r[1] + r[3]))) <= d;
+}
+function enterHouse() {
+  returnSpot = { x: player.x, y: player.y };
+  scene = 'house'; player.x = 562; player.y = 480; player.view = 'back'; player.suit = false; ask = null;
+}
+function drawHouseRoom() {
+  const img = binFull ? houseFullImg : houseEmptyImg;
+  if (img.complete && img.naturalWidth) { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); return; }
+  ctx.fillStyle = '#b3b3b3'; ctx.fillRect(0, 0, 960, 540);
+}
+function hit(r, p, pad) { pad = pad || 0; return p.x >= r[0] - pad && p.x <= r[0] + r[2] + pad && p.y >= r[1] - pad && p.y <= r[1] + r[3] + pad; }
+function mid(r) { return { x: r[0] + r[2] / 2, y: r[1] + r[3] / 2 }; }
+function tooFar(r, what) { if (nearRect(r, HOUSE_REACH)) return false; toast = { text: 'Walk closer to ' + what + '.', t: 2 }; return true; }
+function houseClick(p) {
+  if (hit(oxygenRect, p)) {
+    if (tooFar(oxygenRect, 'the oxygen tank')) return;
+    if (tasks[2].done) { toast = { text: 'The oxygen tank is already full.', t: 2 }; return; }
+    const m = mid(oxygenRect);
+    openYesNo(m.x, m.y + 20, 'Refill oxygen?\nCosts ' + REFILL_COST + '% energy.', () => {
+      if (energy <= REFILL_COST) { toast = { text: 'Not enough energy to refill the oxygen.', t: 2.5 }; return; }
+      energy -= REFILL_COST; refill = { t: 0 };
+    });
+  } else if (hit(storageRect, p)) {
+    if (tooFar(storageRect, 'the energy storage')) return;
+    const m = mid(storageRect);
+    if (solarStopped) openYesNo(m.x, m.y, 'Energy stored: ' + Math.round(energy) + '%\nSolar panels are stopped.\nRestart solar panels?', () => { solarStopped = false; toast = { text: 'Solar panels restarted.', t: 2 }; });
+    else openYesNo(m.x, m.y, 'Store all energy and stop solar panels?\nWhile stopped, the base uses ' + STOPPED_DRAIN + '% energy\nevery hour and nothing recharges.\nRestart them as soon as it is safe.', () => {
+      solarStopped = true;
+      openInfo(m.x, m.y, 'Solar panels stopped.\nEnergy stored: ' + Math.round(energy) + '%\nDraining ' + STOPPED_DRAIN + '% per hour. Restart soon!');
+    });
+  } else if (hit(binRect, p)) {
+    if (tooFar(binRect, 'the bin')) return;
+    if (basket === 0) {
+      const st = stockLines();
+      openInfo(binRect[0] + binRect[2] / 2, binRect[1], ['In the bin:'].concat(st.length ? st : ['nothing yet'], ['Your basket is empty.']).join('\n'));
+      return;
+    }
+    openYesNo(binRect[0] + binRect[2] / 2, binRect[1], 'Empty your basket (' + basket + ') into the bin?', () => {
+      toast = { text: 'Put ' + basket + ' into the bin.', t: 2 };
+      Object.keys(bin).forEach(t => { bin[t] = bin[t].concat(basketItems[t]).sort((a, b) => a - b); basketItems[t] = []; });
+      basket = 0; binFull = true;
+    });
+  } else if (hit(bowlRect, p, 8)) {
+    if (tooFar(bowlRect, 'the kitchen')) return;
+    kitchenMenu();
+  }
+}
+function canMake(r) { return Object.keys(r.needs).every(t => bin[t].length >= r.needs[t]); }
+function needText(r) { return Object.keys(r.needs).map(t => r.needs[t] + ' ' + vegTypes[t].name).join(' + '); }
+function eatenText() { return eatenToday >= 1 ? 'you are full for today' : eatenToday > 0 ? 'half full, eat one more crop' : 'you have not eaten yet'; }
+function kitchenMenu() {
+  const st = stockLines();
+  const lines = ['Kitchen', 'Today: ' + eatenText() + '.', 'Eat 1 meal OR 2 raw crops each day.', '', 'In the bin:'].concat(st.length ? st : ['nothing yet']);
+  openAsk(bowlRect[0] + bowlRect[2] / 2, bowlRect[1], lines.join('\n'),
+    [{ label: 'Cook', primary: true, fn: cookMenu }, { label: 'Eat', primary: true, fn: eatMenu }, { label: 'Close', fn: null }], false);
+}
+function cookMenu() {
+  const st = stockLines();
+  const lines = ['Ingredients in the bin:'].concat(st.length ? st : ['nothing yet'], ['', 'Recipes:'],
+    recipes.map(r => (canMake(r) ? '[x] ' : '[ ] ') + r.name + ': ' + needText(r)),
+    ['', 'Cooking costs ' + COOK_COST + '% energy. A meal goes bad in ' + MEAL_SHELF + ' days.']);
+  if (mealsList.length) lines.push('Meals ready: ' + mealsList.length);
+  const buttons = recipes.filter(canMake).map(r => ({ label: 'Make ' + r.label, primary: true, fn: () => {
+    if (energy <= COOK_COST) { toast = { text: 'Not enough energy to cook.', t: 2.5 }; return; }
+    energy -= COOK_COST;
+    Object.keys(r.needs).forEach(t => { bin[t].sort((a, b) => a - b); bin[t].splice(0, r.needs[t]); });   // oldest ingredients first
+    mealsList.push(day); refreshBinFull();
+    toast = { text: 'You made ' + r.name.toLowerCase() + '!', t: 2.5 }; cookMenu();
+  } }));
+  buttons.push({ label: 'Back', fn: kitchenMenu }, { label: 'Close', fn: null });
+  openAsk(bowlRect[0] + bowlRect[2] / 2, bowlRect[1], lines.join('\n'), buttons, false);
+}
+function eatMenu() {
+  const c = bowlRect[0] + bowlRect[2] / 2;
+  if (eatenToday >= 1) { openInfo(c, bowlRect[1], 'You already ate enough today.'); return; }
+  const buttons = [];
+  if (mealsList.length) buttons.push({ label: 'Eat meal', primary: true, fn: eatMeal });
+  Object.keys(bin).filter(t => bin[t].length).forEach(t => buttons.push({ label: 'Eat ' + vegTypes[t].name, fn: () => eatRaw(t) }));
+  buttons.push({ label: 'Back', fn: kitchenMenu });
+  const lines = ['What do you want to eat?', 'A meal fills you up for the day.', 'A raw crop only fills you half.', 'Today: ' + eatenText() + '.'];
+  if (buttons.length === 1) lines.push('', 'You have nothing to eat! Put crops in the bin first.');
+  openAsk(c, bowlRect[1], lines.join('\n'), buttons, false);
+}
+function eatMeal() {
+  mealsList.sort((a, b) => a - b); mealsList.shift();
+  eatenToday += 1; refreshBinFull();
+  toast = { text: 'You ate a meal. You are full for today.', t: 3 };
+  completeTask(3);
+}
+function eatRaw(t) {
+  bin[t].sort((a, b) => a - b); bin[t].shift();
+  eatenToday += 0.5; refreshBinFull();
+  if (eatenToday >= 1) { toast = { text: 'You are full for today.', t: 3 }; completeTask(3); }
+  else toast = { text: 'A raw crop only fills you half. Eat one more.', t: 3 };
+}
+
+// ---- solar panels (outside) ----
+const solarRects = [[525, 82, 112, 75], [622, 15, 105, 56], [727, 19, 105, 56], [832, 19, 112, 56]];
+function solarCapacity() {
+  if (solarStopped || solarDead) return 0;
+  const base = { 'Clear skies': 90, 'Windy': 80, 'Dusty': 60, 'DUST STORM': 25 }[weatherOn(0).sky] || 80;
+  return base * (1 - Math.max(0, Math.min(1, (day - START_DAY) / 100))) | 0;   // capacity drops over time
+}
+function outsideClick(p) {
+  const r = solarRects.find(r => hit(r, p, 6));
+  if (!r) return;
+  if (!solarRects.some(q => nearRect(q, 90))) { toast = { text: 'Walk closer to the solar panels.', t: 2 }; return; }
+  const m = mid(r);
+  openInfo(m.x, m.y + 30, solarDead ? 'Solar panels dead' : solarStopped ? 'Solar panels\nStopped (energy stored)' : 'Solar panels\nProducing at ' + solarCapacity() + '% capacity\nWeather: ' + weatherOn(0).sky);
+  completeTask(1);
+}
+
+// ---- labels (press I) ----
+function interactives() {
+  const list = [{ r: [appIcon.x, appIcon.y, appIcon.w, appIcon.h], text: 'Weather app' }];
+  if (scene === 'outside') {
+    list.push({ r: greenhouseDoor, text: 'Greenhouse' }, { r: houseDoorZone, text: 'House' });
+    solarRects.forEach((r, i) => list.push({ r, text: i === 0 ? 'Solar panels' : '' }));
+  } else if (scene === 'greenhouse') {
+    plants.forEach(pl => { const q = plantRect(pl); list.push({ r: [q.x, q.y, q.w, q.h], text: vegTypes[pl.t].name }); });
+  } else {
+    list.push({ r: oxygenRect, text: 'Oxygen tank' }, { r: storageRect, text: 'Energy storage' }, { r: binRect, text: 'Bin' },
+              { r: bedRect, text: 'Bed' }, { r: bowlRect, text: 'Kitchen (cook / eat)' });
+  }
+  return list;
+}
+function drawLabels() {
+  ctx.save();
+  ctx.font = 'bold 13px "Courier New", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  interactives().forEach(o => {
+    ctx.setLineDash([5, 4]); ctx.strokeStyle = '#ffe14a'; ctx.lineWidth = 2;
+    ctx.strokeRect(o.r[0], o.r[1], o.r[2], o.r[3]); ctx.setLineDash([]);
+    if (!o.text) return;
+    const w = ctx.measureText(o.text).width + 14;
+    const cx = Math.min(960 - w / 2 - 4, Math.max(w / 2 + 4, o.r[0] + o.r[2] / 2));
+    const cy = o.r[1] - 14 > 12 ? o.r[1] - 14 : o.r[1] + o.r[3] + 14;
+    ctx.fillStyle = 'rgba(16,21,43,0.9)'; ctx.fillRect(cx - w / 2, cy - 10, w, 20);
+    ctx.fillStyle = '#ffe14a'; ctx.fillText(o.text, cx, cy);
+  });
+  ctx.restore();
+}
+function touchingDoor() {
+  const d = greenhouseDoor, m = 10;   // m = how close counts as touching
+  return player.x >= d[0] - m && player.x <= d[0] + d[2] + m && player.y >= d[1] - m && player.y <= d[1] + d[3] + m;
+}
+// Walking off the bottom edge of the soil (the exit strip) leaves the greenhouse.
+const EXIT_Y = 505;
+
+// ---- Weather app icon (bottom-left) ----
+const appImg = new Image();
+appImg.src = 'nasaping.png';   // the weather app icon
+appImg.onerror = () => console.log('Could not load nasaping.png');
+const appIcon = { x: 12, y: 540 - 12 - 111, w: 105, h: 111 };
+function overApp(p) { return p.x >= appIcon.x && p.x <= appIcon.x + appIcon.w && p.y >= appIcon.y && p.y <= appIcon.y + appIcon.h; }
+function drawApp() {
+  const hover = overApp(mouse);
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  if (hover) { ctx.shadowColor = '#fff'; ctx.shadowBlur = 10; }
+  if (appImg.complete && appImg.naturalWidth) ctx.drawImage(appImg, appIcon.x, appIcon.y, appIcon.w, appIcon.h);
+  else { ctx.fillStyle = '#a4c4f0'; ctx.fillRect(appIcon.x, appIcon.y, appIcon.w, appIcon.h); }
+  ctx.restore();
+}
+
+// ---- "Task completed" popups ----
+const popups = [];   // { text, t }
+function completeTask(i) {
+  if (tasks[i].done) return;
+  tasks[i].done = true;
+  popups.push({ text: tasks[i].text + ': completed', t: 3.5 });
+}
+function drawPopup() {
+  if (!popups.length) return;
+  const p = popups[0];
+  ctx.font = 'bold 16px "Courier New", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const w = ctx.measureText(p.text).width + 56;
+  ctx.fillStyle = '#d9f0b0'; ctx.fillRect(480 - w / 2, 60, w, 36);
+  ctx.strokeStyle = '#4a6a14'; ctx.lineWidth = 3; ctx.strokeRect(480 - w / 2, 60, w, 36);
+  ctx.fillStyle = '#2f4a08'; ctx.fillText('\u2713 ' + p.text, 480, 79);
+}
+
+// ---- your existing code ----
+const dashImg = new Image();
+dashImg.src = 'dashboard.png';
+dashImg.onerror = () => console.log('Could not load dashboard.png');
+
+const dash = { open: true, tab: null, scroll: 0 };
+const dashTabs = [
+  { id: 'weather', label: 'Weather', x: 42,  w: 70 },
+  { id: 'tasks',   label: 'Tasks',   x: 118, w: 70 },
+  { id: 'warning', label: 'Warning', x: 194, w: 70 },
+  { id: 'keys',    label: 'Keys',    x: 270, w: 70 }
+];
+// Today's weather repeats on a 7-day cycle. Day 1 = index 0. Add or change entries to change it.
+const weatherCycle = [
+  { sky: 'Clear skies', temp: -63, wind: 18, dust: 'low' },
+  { sky: 'Clear skies', temp: -61, wind: 20, dust: 'low' },
+  { sky: 'DUST STORM',  temp: -66, wind: 55, dust: 'high' },
+  { sky: 'Dusty',       temp: -65, wind: 35, dust: 'medium' },
+  { sky: 'Clear skies', temp: -62, wind: 15, dust: 'low' },
+  { sky: 'Windy',       temp: -64, wind: 40, dust: 'medium' },
+  { sky: 'Clear skies', temp: -63, wind: 12, dust: 'low' }
+];
+function weatherOn(offset) { return weatherCycle[((day - START_DAY + offset) % 7 + 7) % 7]; }
+function dashLines(tab) {
+  if (tab === 'warning' && ev) return eventLines();
+  if (tab === 'weather') {
+    const w = weatherOn(0);
+    const net = GAIN_MAX * solarCapacity() / 100 - (solarStopped ? STOPPED_DRAIN : DRAIN);
+    return [
+      { text: 'Day ' + day + ': ' + w.sky },
+      { text: 'Wind: ' + w.wind + ' km/h   Dust: ' + w.dust },
+      { text: 'Temperature: ' + w.temp + ' C' },
+      { text: 'Solar output: ' + solarCapacity() + '%' },
+      { text: 'Energy stored: ' + Math.round(energy) + '%' },
+      { text: 'Energy change: ' + (net >= 0 ? '+' : '') + net.toFixed(1) + '% per hour' },
+      { text: 'Costs: refill oxygen ' + REFILL_COST + '%, cook a meal ' + COOK_COST + '%.' }
+    ];
+  }
+  if (tab === 'tasks') {
+    return tasks.map((t, i) => {
+      let label = (i + 1) + '. ' + t.text;
+      if (t.need && !t.done) label += ' (' + Math.min(pickedToday, t.need) + '/' + t.need + ')';
+      if (i === 3 && !t.done) label += ' (' + Math.round(Math.min(1, eatenToday) * 100) + '% fed)';
+      return { text: label, done: t.done };
+    });
+  }
+  if (tab === 'warning') {
+    let n = -1;
+    for (let i = 0; i < 7; i++) if (weatherOn(i).sky === 'DUST STORM') { n = i; break; }
+    return alertLines().concat([
+      { text: n === 0 ? 'Dust storm today!' : 'Dust storm in ' + n + ' day' + (n === 1 ? '' : 's') },
+      { text: 'Collect solar power early' }
+    ]);
+  }
+  if (tab === 'keys') {
+    return [
+      { text: 'W A S D / arrows: move' },
+      { text: 'I: show what you can interact with' },
+      { text: 'Click: pick crops, use things, press buttons' },
+      { text: 'Y / N: answer yes or no' },
+      { text: 'R: open this app. Esc or the red button closes it' },
+      { text: 'H: open the Trainer Guide' },
+      { text: 'Enter: continue / start the next day' },
+      { text: 'Mouse wheel or W / S: scroll this text' },
+      { text: 'Walk up to the bed: go to sleep' }
+    ];
+  }
+  return [{ text: 'Choose a category above.' }];
+}
+
+const walkAreas = [
+  [356, 0, 116, 540], // vertical path
+  [0, 341, 360, 71], //horizontal left path
+  [468, 221, 190, 64],
+  [650, 141, 310, 133],
+  [472, 341, 112, 199], //left of house
+  [472, 484, 395, 56] //house 
+];
+
+const player = { x: 410, y: 300, w: 144, h: 108, speed: 180, view: 'front', flip: 1, suit: true };
+
+function walkable(x, y) {
+  if (scene === 'house') return inList(houseWalk, x, y) && !inList(houseBlock, x, y);
+  const areas = scene === 'greenhouse' ? greenhouseWalk : walkAreas;
+  return areas.some(r => x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]);
+}
+
+const keys = {};
+addEventListener('keydown', e => {
+  if (gameOver) return;
+  const k = e.key.toLowerCase();
+  if (ev && ev.waiting) { if (k === 'escape' || k === 'enter') ev.waiting = false; return; }
+  if (ev && ev.phase === 'done') { if (k === 'enter' || k === 'escape') ev = null; return; }
+  keys[k] = true;
+  if (k === 'r') dash.open = true;
+  if (k === 'escape') { dash.open = false; ask = null; }
+  if (k === 'p') debug = !debug;
+  if (dayOver && k === 'enter') newDay();
+  if (dash.open && (k === 'arrowdown' || k === 's')) dash.scroll += 24;
+  if (dash.open && (k === 'arrowup' || k === 'w')) dash.scroll = Math.max(0, dash.scroll - 24);
+  if (k === 'g' && !dash.open) { scene === 'outside' ? enterGreenhouse() : exitGreenhouse(); }  // testing shortcut
+  if (debug && scene === 'outside' && k === 'o') { doorMode = true; corner = null; }
+  if (ask && ask.yesno && k === 'y') pressButton(ask.buttons[0]);
+  if (ask && ask.yesno && k === 'n') ask = null;
+  if (k === 'i' && !dash.open) showLabels = !showLabels;
+  if (debug && scene === 'outside' && k === 'z') walkAreas.pop();
+  if (debug && k === 'c') {
+    console.log('const walkAreas = ' + JSON.stringify(walkAreas) + ';');
+    console.log('let greenhouseDoor = ' + JSON.stringify(greenhouseDoor) + ';');
+  }
+});
+addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+let debug = false;
+let corner = null;
+let doorMode = false;
+const mouse = { x: 0, y: 0 };
+
+function canvasPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: Math.round((e.clientX - r.left) * canvas.width / r.width),
+    y: Math.round((e.clientY - r.top) * canvas.height / r.height)
+  };
+}
+canvas.addEventListener('mousemove', e => Object.assign(mouse, canvasPoint(e)));
+canvas.addEventListener('click', e => {
+  if (gameOver) return;
+  const p = canvasPoint(e);
+  if (ev && ev.waiting) {   // close the warning with the red button
+    const r = dashRect(), u = (p.x - r.x) / r.sx, v = (p.y - r.y) / r.sy;
+    if (Math.hypot(u - 369, v - 35) <= 40) ev.waiting = false;
+    return;
+  }
+  if (ev && ev.phase === 'done') { ev = null; return; }
+  if (dash.open) { dashClick(p); return; }
+  if (dayOver) { newDay(); return; }
+  if (overApp(p)) { dash.open = true; return; }
+  if (ask) { askClick(p); return; }
+  if (refill) return;
+  if (scene === 'house' && !debug) { houseClick(p); return; }
+  if (scene === 'outside' && !debug) { outsideClick(p); return; }
+  if (scene === 'greenhouse' && !debug) { plantClick(p); return; }
+  if (!debug || scene !== 'outside') return;
+  if (!corner) { corner = p; return; }
+  if (doorMode) {
+    greenhouseDoor = [Math.min(corner.x, p.x), Math.min(corner.y, p.y), Math.abs(p.x - corner.x), Math.abs(p.y - corner.y)];
+    doorMode = false; corner = null; return;
+  }
+  walkAreas.push([Math.min(corner.x, p.x), Math.min(corner.y, p.y), Math.abs(p.x - corner.x), Math.abs(p.y - corner.y)]);
+  corner = null;
+});
+
+// ---- picking logic (new) ----
+function plantRect(pl) {
+  const v = vegTypes[pl.t], fullH = v.w * v.src[3] / v.src[2];
+  const h = Math.max(14, fullH * growth(pl)), base = pl.y + fullH / 2;
+  return { x: pl.x - v.w / 2, y: base - h, w: v.w, h };
+}
+function plantAt(p) {
+  for (let i = plants.length - 1; i >= 0; i--) {
+    const r = plantRect(plants[i]);
+    if (p.x >= r.x - 4 && p.x <= r.x + r.w + 4 && p.y >= r.y - 4 && p.y <= r.y + r.h + 4) return plants[i];
+  }
+  return null;
+}
+function plantClick(p) {
+  const pl = plantAt(p);
+  if (!pl) return;
+  const dist = Math.hypot(pl.x - player.x, pl.y - player.h / 2 - player.y);
+  if (dist > REACH) { toast = { text: 'Walk closer to pick this ' + vegTypes[pl.t].name + '.', t: 2 }; return; }
+  if (pl.dead) { openYesNo(pl.x, pl.y, 'Clear this dead ' + vegTypes[pl.t].name + '?', () => { pl.dead = false; pl.age = 0; }); return; }
+  if (MUST_BE_RIPE && growth(pl) < 1) { toast = { text: 'This ' + vegTypes[pl.t].name + ' is only ' + Math.floor(growth(pl) * 100) + '% grown.', t: 2 }; return; }
+  if (basket >= BASKET_MAX) { toast = { text: 'Basket full! Empty it into the bin at the house.', t: 2.5 }; return; }
+  openYesNo(pl.x, pl.y, 'Pick this ' + vegTypes[pl.t].name + '?\nIt rots ' + SHELF[pl.t] + ' days after you pick it.', () => pickPlant(pl));
+}
+function pickPlant(pl) {
+  const i = plants.indexOf(pl);
+  if (i < 0 || basket >= BASKET_MAX) return;
+  plants.splice(i, 1); basket++; pickedToday++; basketItems[pl.t].push(day);
+  toast = { text: 'Picked a ' + vegTypes[pl.t].name + '!', t: 1.5 };
+  const types = Object.keys(vegTypes);   // a new random seed is planted in the same spot, starting at 0%
+  plants.push({ t: types[Math.floor(Math.random() * types.length)], x: pl.x, y: pl.y, age: 0 });
+}
+// Dialogs: ask = { x, y, lines, buttons: [{label, fn, primary}], yesno }
+function openAsk(x, y, text, buttons, yesno) { ask = { x, y, lines: text.split('\n'), buttons, yesno }; }
+function openYesNo(x, y, text, onYes) { openAsk(x, y, text, [{ label: 'Yes (Y)', fn: onYes, primary: true }, { label: 'No (N)', fn: null }], true); }
+function openInfo(x, y, text) { openAsk(x, y, text, [{ label: 'OK', fn: null, primary: true }], false); }
+function pressButton(b) { ask = null; if (b.fn) b.fn(); }
+function askBox() {
+  ctx.font = 'bold 16px "Courier New", monospace';
+  const bw = ask.buttons.map(b => Math.max(80, ctx.measureText(b.label).width + 24));
+  const btnTotal = bw.reduce((a, c) => a + c, 0) + 12 * (bw.length - 1);
+  const textW = Math.max(...ask.lines.map(l => ctx.measureText(l).width));
+  const w = Math.max(220, textW + 40, btnTotal + 40), h = 20 + ask.lines.length * 22 + 54;
+  const x = Math.min(canvas.width - w - 8, Math.max(8, ask.x - w / 2));
+  const above = ask.y - 40 - h > 8;
+  const y = Math.min(540 - h - 8, above ? ask.y - 40 - h : ask.y + 40);
+  let bx = x + (w - btnTotal) / 2;
+  const by = y + 20 + ask.lines.length * 22 + 8;
+  const btns = ask.buttons.map((b, i) => { const r = { x: bx, y: by, w: bw[i], h: 28, b }; bx += bw[i] + 12; return r; });
+  return { x, y, w, h, btns };
+}
+function inRect(p, r) { return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h; }
+function askClick(p) {
+  const box = askBox();
+  const hit = box.btns.find(r => inRect(p, r));
+  if (hit) pressButton(hit.b);
+  else if (!inRect(p, box)) ask = null;
+}
+function drawAsk() {
+  const b = askBox();
+  ctx.fillStyle = '#f3e3c3'; ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 4; ctx.strokeRect(b.x, b.y, b.w, b.h);
+  ctx.fillStyle = '#3b2412'; ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ask.lines.forEach((l, i) => ctx.fillText(l, b.x + b.w / 2, b.y + 30 + i * 22));
+  b.btns.forEach(r => {
+    ctx.fillStyle = r.b.primary ? '#6a9a1f' : '#f3e3c3'; ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = '#1d2a05'; ctx.font = 'bold 13px "Courier New", monospace';
+    ctx.fillText(r.b.label, r.x + r.w / 2, r.y + r.h / 2);
+  });
+}
+function panel(x, y, w, h) {
+  ctx.fillStyle = '#f3e3c3'; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(x, y, w, h);
+}
+function drawHud() {
+  ctx.textBaseline = 'middle';
+  // Basket (top-left)
+  panel(12, 12, 150, 30);
+  ctx.textAlign = 'left'; ctx.fillStyle = '#3b2412'; ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.fillText('Basket: ' + basket + '/' + BASKET_MAX, 22, 28);
+
+  // Clock and energy (top-right)
+  panel(960 - 12 - 190, 12, 190, 30);
+  ctx.textAlign = 'center'; ctx.fillStyle = '#3b2412'; ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.fillText('Day ' + day + '  ' + clockText(), 960 - 12 - 95, 28);
+  const frac = Math.max(0, Math.min(1, energy / 100));
+  const bx = 960 - 12 - 190, by = 48;
+  panel(bx, by, 190, 30);
+  ctx.fillStyle = '#3b2412'; ctx.fillRect(bx + 8, by + 8, 174, 14);
+  ctx.fillStyle = frac > 0.5 ? '#6a9a1f' : frac > 0.25 ? '#e0b020' : '#c8402a';
+  ctx.fillRect(bx + 8, by + 8, 174 * frac, 14);
+  ctx.textAlign = 'right'; ctx.font = 'bold 11px "Courier New", monospace'; ctx.fillStyle = '#3b2412';
+  ctx.fillText('Energy ' + Math.round(energy) + '%' + (solarStopped ? ' DRAINING' : ''), bx + 190, by + 42);
+
+  // Oxygen and food status (top-right, under the energy bar)
+  panel(bx, 104, 190, 26);
+  ctx.textAlign = 'left'; ctx.font = 'bold 13px "Courier New", monospace';
+  ctx.fillStyle = oxy.alert ? '#b82424' : tasks[2].done ? '#3b2412' : '#8a5a10';
+  ctx.fillText(oxy.alert ? 'Oxygen: LOW! ' + Math.max(0, Math.ceil(oxy.t)) + 's' : tasks[2].done ? 'Oxygen: full' : 'Oxygen: needs refill', bx + 10, 117);
+  panel(bx, 134, 190, 26);
+  ctx.fillStyle = eatenToday >= 1 ? '#3b2412' : '#8a5a10';
+  ctx.fillText(eatenToday >= 1 ? 'Food: full today' : 'Food: ' + Math.round(eatenToday * 100) + '% (eat today)', bx + 10, 147);
+
+  if (toast.t > 0) {
+    ctx.textAlign = 'center'; ctx.font = 'bold 16px "Courier New", monospace';
+    const w = ctx.measureText(toast.text).width + 24;
+    panel(480 - w / 2, 490, w, 30);
+    ctx.fillStyle = '#3b2412'; ctx.fillText(toast.text, 480, 506);
+  }
+  if (refill) {
+    panel(330, 235, 300, 70);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#3b2412'; ctx.font = 'bold 16px "Courier New", monospace';
+    ctx.fillText('Refilling oxygen...', 480, 255);
+    ctx.fillRect(350, 270, 260, 20);
+    ctx.fillStyle = '#6aa0e0'; ctx.fillRect(353, 273, 254 * Math.min(1, refill.t / REFILL_SECONDS), 14);
+  }
+  if (oxy.alert) {   // low-oxygen countdown banner (under the event banner)
+    ctx.fillStyle = Math.floor(oxy.t * 2) % 2 ? '#2a6ab8' : '#10305a';
+    ctx.fillRect(330, 48, 300, 30);
+    ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(330, 48, 300, 30);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 16px "Courier New", monospace'; ctx.textAlign = 'center';
+    ctx.fillText('LOW OXYGEN ' + mmss(Math.max(0, Math.ceil(oxy.t))), 480, 64);
+  }
+  if (oxy.msg > 0) {   // big message when the alert starts
+    ctx.fillStyle = '#f4c2b4'; ctx.fillRect(220, 110, 520, 96);
+    ctx.strokeStyle = '#7a1010'; ctx.lineWidth = 4; ctx.strokeRect(220, 110, 520, 96);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#7a1010';
+    ctx.font = 'bold 24px "Courier New", monospace'; ctx.fillText('LOW OXYGEN!', 480, 140);
+    ctx.font = 'bold 15px "Courier New", monospace';
+    ctx.fillText('Refill the oxygen tank at the house', 480, 168);
+    ctx.fillText('within ' + OXY_SECONDS + ' seconds!', 480, 190);
+  }
+  if (dayOver) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, 960, 540);
+    panel(240, 215, 480, 110);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#3b2412';
+    ctx.font = 'bold 26px "Courier New", monospace'; ctx.fillText('Day ' + day + ' is over!', 480, 250);
+    ctx.font = 'bold 15px "Courier New", monospace'; ctx.fillText('You picked ' + pickedToday + ' vegetables today.', 480, 280);
+    ctx.fillText('Click or press Enter to start day ' + (day + 1), 480, 304);
+  }
+}
+
+function dashRect(k) {
+  const h = canvas.height * (k || 0.8);
+  const w = h * 407 / 432;   // the app is always 407 x 432, whatever the picture files measure
+  return { x: (canvas.width - w) / 2, y: (canvas.height - h) / 2, w, h, sx: w / 407, sy: h / 432 };
+}
+
+function dashClick(p) {
+  const r = dashRect();
+  const u = (p.x - r.x) / r.sx, v = (p.y - r.y) / r.sy;
+  if (Math.hypot(u - 369, v - 35) <= 34) { dash.open = false; return; }
+  dashTabs.forEach(t => {
+    if (u >= t.x && u <= t.x + t.w && v >= 198 && v <= 228) { dash.tab = t.id; dash.scroll = 0; }
+  });
+}
+
+function drawDash() {
+  if (!dashImg.complete || !dashImg.naturalWidth) return;
+  const r = dashRect();
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawAppPicture(dashImageNow(), r);   // the picture for today's day number
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  dashTabs.forEach(t => {
+    const bx = r.x + t.x * r.sx, by = r.y + 198 * r.sy, bw = t.w * r.sx, bh = 30 * r.sy;
+    const hover = mouse.x >= bx && mouse.x <= bx + bw && mouse.y >= by && mouse.y <= by + bh;
+    ctx.fillStyle = dash.tab === t.id ? '#ec6a3f' : hover ? '#7f9fd6' : '#5d7fb8';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = '#10152b';
+    ctx.lineWidth = 3 * r.sx;
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = '#10152b';
+    ctx.font = 'bold ' + 14 * r.sx + 'px "Courier New", monospace';
+    ctx.fillText(t.label, bx + bw / 2, by + bh / 2);
+  });
+
+  dash.scroll = drawTextArea(r, dashLines(dash.tab), { scroll: dash.scroll });
+}
+
+function update(dt) {
+  if (gameOver) return;
+  if (toast.t > 0) toast.t -= dt;
+  if (oxy.msg > 0) oxy.msg -= dt;
+  if (popups.length) { popups[0].t -= dt; if (popups[0].t <= 0) popups.shift(); }
+  const paused = dash.open || evPaused();
+  if (!paused && !dayOver) {
+    gameTime += dt;
+    if (gameTime >= DAY_SECONDS) { gameTime = DAY_SECONDS; dayOver = true; }
+    // energy: the solar panels charge it (more when the weather is good), the base uses some every hour.
+    // When the panels are stopped nothing recharges and the base uses much more.
+    const drainNow = solarStopped ? STOPPED_DRAIN : DRAIN;
+    energy = Math.max(0, Math.min(100, energy + (GAIN_MAX * solarCapacity() / 100 - drainNow) * dt / HOUR_SECONDS));
+    if (energy > 0) energyArmed = true;
+    else if (energyArmed) endGame('You ran out of energy.');
+    if (energy < 25 && !lowEnergyWarned) { lowEnergyWarned = true; toast = { text: 'Low energy: ' + Math.round(energy) + '%. Keep the solar panels running!', t: 4 }; }
+    if (energy > 35) lowEnergyWarned = false;
+    if (solarStopped) {   // keep reminding the player that stopped panels drain the energy fast
+      if (ev) stopRemind = 14;
+      else { stopRemind += dt; if (stopRemind >= 15) { stopRemind = 0; toast = { text: 'Solar panels are still stopped! Energy is draining fast.', t: 3.5 }; } }
+    } else stopRemind = 0;
+    // oxygen: if it is not refilled after 2 hours, you get a low-oxygen alert and 10 seconds to refill it
+    if (!oxy.alert && !tasks[2].done && !ev && hoursPassed() >= OXY_HOURS) { oxy.alert = true; oxy.t = OXY_SECONDS; oxy.msg = 4; }
+    if (oxy.alert && !refill) { oxy.t -= dt; if (oxy.t <= 0) endGame('You ran out of oxygen.'); }
+    // hunger reminder
+    if (!hungerWarned && hoursPassed() >= 6 && eatenToday < 1) { hungerWarned = true; toast = { text: 'You still need to eat today! Cook a meal or eat 2 crops.', t: 4 }; }
+    if (!ev) { const e = events.find(e => e.day === day && !e.fired && gameTime >= e.hour * HOUR_SECONDS); if (e) startEvent(e); }
+    else updateEvent(dt);
+  }
+  if (refill && !paused && !dayOver) {
+    refill.t += dt;
+    if (refill.t >= REFILL_SECONDS) { refill = null; completeTask(2); oxy.alert = false; toast = { text: 'Oxygen tank refilled!', t: 2.5 }; }
+  }
+  if (paused || ask || refill || dayOver) return;
+  let dx = 0, dy = 0;
+  if (keys.arrowleft || keys.a)  { dx = -1; player.view = 'side'; player.flip = -1; }
+  if (keys.arrowright || keys.d) { dx = 1;  player.view = 'side'; player.flip = 1; }
+  if (keys.arrowup || keys.w)    { dy = -1; player.view = 'back'; }
+  if (keys.arrowdown || keys.s)  { dy = 1;  player.view = 'front'; }
+
+  const nx = player.x + dx * player.speed * dt;
+  const ny = player.y + dy * player.speed * dt;
+  if (walkable(nx, player.y)) player.x = nx;
+  if (walkable(player.x, ny)) player.y = ny;
+
+  if (pickedToday >= tasks[0].need) completeTask(0);
+
+  if (scene === 'house') {
+    if (!nearRect(bedRect, 70)) bedArmed = true;
+    else if (bedArmed && !ask && !ev) { bedArmed = false; const m = mid(bedRect); openYesNo(m.x, bedRect[1] + bedRect[3], 'Go to bed?', () => newDay()); }
+  }
+  if (scene === 'outside' && !touchingDoor() && !inBox(houseDoorZone)) doorArmed = true;
+  if (scene === 'outside' && doorArmed && touchingDoor()) enterGreenhouse();
+  else if (scene === 'outside' && doorArmed && inBox(houseDoorZone)) enterHouse();
+  else if (scene !== 'outside' && dy > 0 && player.y >= EXIT_Y - 1) exitGreenhouse();
+}
+
+function drawDebug() {
+  const areas = scene === 'house' ? houseWalk : scene === 'greenhouse' ? greenhouseWalk : walkAreas;
+  if (scene === 'house') { ctx.fillStyle = 'rgba(255,0,0,0.3)'; houseBlock.forEach(r => ctx.fillRect(r[0], r[1], r[2], r[3])); }
+  ctx.fillStyle = 'rgba(0,255,100,0.3)';
+  ctx.strokeStyle = '#00ff66';
+  ctx.lineWidth = 2;
+  areas.forEach(r => { ctx.fillRect(r[0], r[1], r[2], r[3]); ctx.strokeRect(r[0], r[1], r[2], r[3]); });
+  if (scene === 'outside') {
+    const d = greenhouseDoor;
+    ctx.fillStyle = 'rgba(255,140,0,0.35)'; ctx.strokeStyle = '#ff8c00';
+    ctx.fillRect(d[0], d[1], d[2], d[3]); ctx.strokeRect(d[0], d[1], d[2], d[3]);
+  }
+  if (corner) {
+    ctx.strokeStyle = doorMode ? '#ff8c00' : '#ffff00';
+    ctx.strokeRect(corner.x, corner.y, mouse.x - corner.x, mouse.y - corner.y);
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(130, 452, 480, 78);
+  ctx.fillStyle = '#fff';
+  ctx.font = '16px Arial';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(doorMode ? 'DOOR MODE: click two corners around the dome' : 'DEBUG: click two corners = walkable box. O = set door (orange)', 138, 474);
+  ctx.fillText('Z = undo   C = print list to console   P = hide', 138, 496);
+  ctx.fillText('Mouse: ' + mouse.x + ', ' + mouse.y + '   Player feet: ' + Math.round(player.x) + ', ' + Math.round(player.y), 138, 518);
+}
+
+function drawPlayer() {
+  ctx.save();
+  ctx.translate(Math.round(player.x), Math.round(player.y));
+  ctx.scale(player.view === 'side' ? player.flip : 1, 1);
+  const img = sprites[(player.suit ? 'A' : '') + player.view];
+  if (img.complete && img.naturalWidth) {
+    const w = player.h * img.naturalWidth / img.naturalHeight;
+    ctx.drawImage(img, -w / 2, -player.h, w, player.h);
+  } else {
+    ctx.fillStyle = '#ec6a3f';
+    ctx.fillRect(-player.w / 2, -player.h, player.w, player.h);
+  }
+  ctx.restore();
+}
+
+function drawPlants() {
+  const prev = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false; // keeps the pixel art crisp
+  plants.forEach(pl => {
+    if (pl.dead) { drawDeadPlant(pl); return; }
+    const v = vegTypes[pl.t];
+    if (!v.img.complete || !v.img.naturalWidth) return;
+    const fullH = v.w * v.src[3] / v.src[2], base = pl.y + fullH / 2, f = growth(pl);
+    const hover = !ask && !debug && plantAt(mouse) === pl;
+    // the sprite rises out of the soil: only the top part shows until fully grown
+    if (f > 0) {
+      const sh = Math.max(1, v.src[3] * f), dh = fullH * sh / v.src[3];
+      if (hover) { ctx.save(); ctx.shadowColor = '#fff'; ctx.shadowBlur = 8; }
+      ctx.drawImage(v.img, v.src[0], v.src[1], v.src[2], sh, pl.x - v.w / 2, base - dh, v.w, dh);
+      if (hover) ctx.restore();
+    }
+    // soil mound at the base
+    ctx.fillStyle = '#4a2e18';
+    ctx.fillRect(pl.x - v.w * 0.45, base - 3, v.w * 0.9, f >= 1 ? 3 : 6);
+    // growth percentage
+    const pct = Math.floor(f * 100) + '%';
+    ctx.font = 'bold 12px "Courier New", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 3; ctx.strokeStyle = '#2a1a0d'; ctx.strokeText(pct, pl.x, base + 13);
+    ctx.fillStyle = f >= 1 ? '#b5e655' : '#ffffff'; ctx.fillText(pct, pl.x, base + 13);
+  });
+  ctx.imageSmoothingEnabled = prev;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (scene === 'greenhouse') {
+    if (soilImg.complete && soilImg.naturalWidth) ctx.drawImage(soilImg, 0, 0, canvas.width, canvas.height);
+    // vegetables standing behind the player are drawn first, the ones in front after
+    drawPlants();
+  } else if (scene === 'house') {
+    drawHouseRoom();
+  } else if (bg.complete && bg.naturalWidth) {
+    ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
+  }
+
+  drawPlayer();
+
+  if (ask) drawAsk();
+  drawHud();
+  drawApp();
+  if (showLabels) drawLabels();
+  drawPopup();
+  drawEvent();
+  if (debug) drawDebug();
+  if (dash.open) drawDash();
+
+  if (gameOver) {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 960, 540);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 48px "Courier New", monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('GAME OVER', 480, 270);
+    if (gameOverReason) { ctx.font = '20px "Courier New", monospace'; ctx.fillText(gameOverReason, 480, 320); }
+  }
+}
+
+// ================= DUST STORM  =================
+const DUST_SECONDS = 90;
+const DAMAGE_AFTER = 30;
+let shieldOn = false;
+let greenhouseMarks = [];
+
+events.push({ day: 502, hour: 3, type: 'dust' });
+
+function dustLines() {
+  const s = Math.max(0, Math.ceil(ev.t));
+  if (ev.waiting && !ev.damage) return [
+    { text: 'Alert: Dust Storm coming in approx. 2 mins. Collect food and store energy. Attach electrodynamic dust shield to the solar panels.' }];
+  if (ev.waiting && ev.damage) return [
+    { text: 'Warning: the structure of the greenhouse is unstable!' },
+    { text: 'Go repair it. Click the two ! marks next to the greenhouse.' }];
+  const left = cropsLeft(), fixed = greenhouseMarks.filter(m => m.fixed).length;
+  const lines = [
+    { text: 'A dust storm is coming. It arrives in ' + mmss(s) + '.' },
+    { text: '1. Collect all ripe crops (' + left + ' left)', done: left === 0 },
+    { text: '2. Store energy / stop solar panels', done: solarStopped },
+    { text: '3. Attach dust shield to the solar panels', done: shieldOn }];
+  if (ev.damage) lines.push({ text: '4. Repair the greenhouse (' + fixed + '/2)', done: fixed === 2 });
+  return lines;
+}
+
+function updateDust(dt) {
+  ev.t -= dt;
+  if (!ev.damage && ev.t <= DUST_SECONDS - DAMAGE_AFTER) {
+    ev.damage = true;
+    ev.waiting = true;
+    greenhouseMarks = [{ x: 50, y: 305, fixed: false }, { x: 275, y: 305, fixed: false }];
+    return;
+  }
+  if (ev.t > 0) return;
+  let n = 0;
+  ev.targets.forEach(p => { if (plants.includes(p) && !p.dead) { p.dead = true; n++; } });
+  ev.result.push(n ? n + ' ripe crop' + (n > 1 ? 's' : '') + ' died.' : 'All ripe crops were saved.');
+  if (!shieldOn) { solarDead = true; ev.result.push('The solar panels are buried in dust.'); }
+  else ev.result.push('The dust shield protected the solar panels.');
+  if (!solarStopped) { energy = Math.round(energy / 2); ev.result.push('Half of your stored energy was lost.'); }
+  else ev.result.push('Your stored energy is safe.');
+  if (greenhouseMarks.some(m => !m.fixed)) { plants.forEach(p => { p.dead = true; }); ev.result.push('The greenhouse broke. All plants died.'); }
+  else ev.result.push('The greenhouse held up.');
+  greenhouseMarks = [];
+  shieldOn = false;
+  ev.phase = 'done';
+}
+
+function drawMarks() {
+  greenhouseMarks.forEach(m => {
+    if (m.fixed) return;
+    const bob = Math.sin(performance.now() / 200) * 4;
+    ctx.save();
+    ctx.translate(m.x, m.y + bob);
+    ctx.fillStyle = '#ffd23f';
+    ctx.strokeStyle = '#4a2e18';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(0, -22); ctx.lineTo(20, 12); ctx.lineTo(-20, 12); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#4a2e18';
+    ctx.font = 'bold 22px "Courier New", monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('!', 0, 3);
+    ctx.restore();
+  });
+}
+
+const _eventLines = eventLines;
+eventLines = function () {
+  return ev && ev.type === 'dust' ? dustLines() : _eventLines();
+};
+
+const _startEvent = startEvent;
+startEvent = function (e) {
+  _startEvent(e);
+  if (e.type === 'dust') {
+    ev.t = DUST_SECONDS;
+    ev.targets = plants.filter(p => !p.dead && growth(p) >= 1);
+    ev.damage = false;
+  }
+};
+
+const _updateEvent = updateEvent;
+updateEvent = function (dt) {
+  if (ev.type === 'dust') updateDust(dt);
+  else _updateEvent(dt);
+};
+
+const _drawEvent = drawEvent;
+drawEvent = function () {
+  if (!ev || ev.type !== 'dust' || ev.waiting) return _drawEvent();
+  if (ev.phase === 'done') {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const lines = ev.result, h = 110 + lines.length * 26;
+    panel(220, 270 - h / 2, 520, h);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#3b2412';
+    ctx.font = 'bold 22px "Courier New", monospace';
+    ctx.fillText('The dust storm has finished.', 480, 270 - h / 2 + 32);
+    ctx.font = 'bold 15px "Courier New", monospace';
+    lines.forEach((l, i) => ctx.fillText(l, 480, 270 - h / 2 + 66 + i * 26));
+    ctx.fillText('Click or press Enter to continue', 480, 270 + h / 2 - 22);
+    return;
+  }
+  const s = Math.max(0, Math.ceil(ev.t));
+  ctx.fillStyle = Math.floor(ev.t * 2) % 2 ? '#b82424' : '#7a1010';
+  ctx.fillRect(330, 12, 300, 30);
+  ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(330, 12, 300, 30);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('DUST STORM ' + mmss(s), 480, 28);
+};
+
+const _outsideClick = outsideClick;
+outsideClick = function (p) {
+  const mk = greenhouseMarks.find(m => !m.fixed && Math.hypot(p.x - m.x, p.y - m.y) <= 28);
+  if (mk) {
+    if (Math.hypot(player.x - mk.x, player.y - mk.y) > 110) { toast = { text: 'Walk closer to the greenhouse.', t: 2 }; return; }
+    openYesNo(mk.x, mk.y, 'Repair this part of the greenhouse?', () => {
+      mk.fixed = true;
+      toast = { text: 'Greenhouse repaired!', t: 2 };
+      if (greenhouseMarks.every(m => m.fixed)) popups.push({ text: 'Greenhouse repaired', t: 3 });
+    });
+    return;
+  }
+  const r = solarRects.find(r => hit(r, p, 6));
+  if (r && ev && ev.type === 'dust' && ev.phase === 'go' && !shieldOn) {
+    if (!solarRects.some(q => nearRect(q, 90))) { toast = { text: 'Walk closer to the solar panels.', t: 2 }; return; }
+    const m = mid(r);
+    openYesNo(m.x, m.y + 30, 'Attach the electrodynamic\ndust shield to the solar panels?', () => {
+      shieldOn = true;
+      toast = { text: 'Dust shield attached!', t: 2.5 };
+    });
+    return;
+  }
+  _outsideClick(p);
+};
+
+const _newDay = newDay;
+newDay = function () {
+  greenhouseMarks = [];
+  shieldOn = false;
+  _newDay();
+};
+
+const _draw = draw;
+draw = function () {
+  _draw();
+  if (scene === 'outside' && !gameOver && !dash.open && !(ev && ev.waiting)) drawMarks();
+};
+// ================= END DUST STORM =================
+
+// ================= DONKI WARNINGS + "WHAT REALLY HAPPENED" =================
+const DONKI_NOTE = 'Data: NASA DONKI database';
+const FLARE_CLASS = 'M';
+const CME_SPEED = 726;
+const CME_SOURCE = 'AR 14571';
+
+const LEARN = {
+  flare: {
+    text: "A solar flare is a sudden flash of light and energy from the Sun. Flares are ranked A, B, C, M, and X, and each letter is ten times stronger than the one before. M-class is medium. Some flares send out fast particles that can harm astronauts, so crews shelter in the best-protected part of their home.",
+    src: 'Source: NASA DONKI (Space Weather Database Of Notifications, Knowledge, Information)'
+  },
+  cme: {
+    text: "A CME (coronal mass ejection) is a huge cloud of charged particles thrown out by the Sun. It is slower than a flare's light and takes hours to days to arrive, so scientists can estimate its speed and where it came from, like an active region (AR) on the Sun. Strong CMEs can disturb electronics and power systems, so equipment is protected or powered down.",
+    src: 'Source: NASA DONKI (Space Weather Database Of Notifications, Knowledge, Information)'
+  },
+  dust: {
+    text: "Dust storms on Mars can block sunlight, so solar panels make much less power. Fine dust also settles on panels and equipment. NASA is developing electrodynamic dust shields that use electric fields to push dust off surfaces. That is why storing energy and protecting the panels matters.",
+    src: 'Source: NASA research on Martian dust and electrodynamic dust shields'
+  }
+};
+
+const _eventLinesDonki = eventLines;
+eventLines = function () {
+  if (ev && ev.waiting && ev.type === 'flare') {
+    const s = Math.ceil(ev.t);
+    return [
+      { text: 'Alert: Solar flare detected. Possible class: ' + FLARE_CLASS + '.' },
+      { text: 'Go inside your house within ' + s + ' seconds.' },
+      { text: DONKI_NOTE }];
+  }
+  if (ev && ev.waiting && ev.type === 'cme') {
+    return [
+      { text: 'Alert: CME detected.' },
+      { text: 'Estimated speed: up to ' + CME_SPEED + ' km/s.' },
+      { text: 'Possible source: ' + CME_SOURCE + '.' },
+      { text: 'In ' + mmss(Math.ceil(ev.t)) + ': collect crops, go inside, store energy.' },
+      { text: DONKI_NOTE }];
+  }
+  return _eventLinesDonki();
+};
+
+function drawLearnPanel() {
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const info = LEARN[ev.type], res = ev.result;
+  ctx.font = '14px "Courier New", monospace';
+  const learn = wrapLines([{ text: info.text }], 570);
+  const h = 62 + res.length * 24 + 14 + 22 + 26 + learn.length * 20 + 10 + 18 + 40;
+  const x = 170, w = 620, y = Math.max(8, 270 - h / 2);
+  panel(x, y, w, h);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#3b2412';
+  ctx.font = 'bold 22px "Courier New", monospace';
+  ctx.fillText('The ' + { flare: 'solar flare', cme: 'CME', dust: 'dust storm' }[ev.type] + ' has finished.', x + w / 2, y + 30);
+  ctx.font = 'bold 15px "Courier New", monospace';
+  res.forEach((l, i) => ctx.fillText(l, x + w / 2, y + 66 + i * 24));
+  let cy = y + 62 + res.length * 24 + 14;
+  ctx.fillRect(x + 30, cy, w - 60, 2);
+  cy += 22;
+  ctx.font = 'bold 17px "Courier New", monospace';
+  ctx.fillText('What really happened', x + w / 2, cy);
+  cy += 26;
+  ctx.font = '14px "Courier New", monospace'; ctx.textAlign = 'left';
+  learn.forEach((l, i) => ctx.fillText(l.text, x + 25, cy + i * 20));
+  cy += learn.length * 20 + 10;
+  ctx.fillStyle = '#6b4a2a'; ctx.font = 'italic 12px "Courier New", monospace';
+  ctx.fillText(info.src, x + 25, cy + 8);
+  ctx.textAlign = 'center'; ctx.fillStyle = '#3b2412'; ctx.font = 'bold 14px "Courier New", monospace';
+  ctx.fillText('Click or press Enter to continue', x + w / 2, y + h - 22);
+}
+
+const _drawEventDonki = drawEvent;
+drawEvent = function () {
+  if (ev && !ev.waiting && ev.phase === 'done' && LEARN[ev.type]) return drawLearnPanel();
+  _drawEventDonki();
+};
+// ================= END DONKI =================
+
+// ================= LIVE DONKI + OSDR + DEBRIEF) =================
+const DONKI_DAYS = 30;          // days back to look for real flares and CMEs (the new DONKI service rejects ranges over 30 days)
+// DONKI moved to ccmc.gsfc.nasa.gov/DONKI-API on 2026-09-30 and reportedly needs no API key any more.
+
+// Used when the live data can't be reached. Replace with a REAL record copied from DONKI, and fill in the date.
+const FALLBACK = {
+  flare: { type: 'flare', classType: 'M3.5', date: '2026-11-05', region: 14566, live: false },
+  cme:   { type: 'cme', speed: 726, date: '2026-11-05', region: 14571, mars: false, live: false }
+};
+
+// Add real OSDR findings here (study number from osdr.nasa.gov). Entries without a study number are ignored.
+const OSDR_FACTS = [ 
+  { study: 'OSD-431', text: 'Space radiation made human blood-vessel cells in a dish switch on DNA repair.' }, 
+  { study: 'OSD-431', text: 'Microgravity and space radiation affect cells in different ways, so each needs its own protection.' }, 
+];
+
+function ymd(d) { return d.toISOString().slice(0, 10); }
+async function donkiGet(path, start, end) {
+  const r = await fetch('https://ccmc.gsfc.nasa.gov/DONKI-API/get/' + path + '?startDate=' + start + '&endDate=' + end);
+  if (!r.ok) throw new Error(path + ' ' + r.status);
+  return r.json();
+}
+function flareStrength(c) { return 'ABCMX'.indexOf(c[0]) * 100 + (parseFloat(c.slice(1)) || 0); }
+function parseFlares(list) {
+  return (Array.isArray(list) ? list : []).filter(f => f.classType)
+    .map(f => ({ type: 'flare', classType: f.classType, date: (f.beginTime || '').slice(0, 10), region: f.activeRegionNum || null, live: true }))
+    .sort((a, b) => flareStrength(b.classType) - flareStrength(a.classType)).slice(0, 4);
+}
+function parseCmes(list) {
+  const out = [];
+  (Array.isArray(list) ? list : []).forEach(c => {
+    const an = (c.cmeAnalyses || []).find(a => a.isMostAccurate) || (c.cmeAnalyses || [])[0];
+    if (!an || !an.speed) return;
+    const mars = (an.enlilList || []).some(e => (e.impactList || []).some(i => /mars/i.test(i.location || '')));
+    out.push({ type: 'cme', speed: Math.round(an.speed), date: (c.startTime || '').slice(0, 10), region: c.activeRegionNum || null, mars, live: true });
+  });
+  return out.sort((a, b) => b.speed - a.speed).slice(0, 4);
+}
+
+let donkiExtra = false;
+function applyDonki(flare, cme) {
+  events.filter(e => e.type === 'flare' && !e.fired).forEach((e, i) => { if (flare.length) e.real = flare[i % flare.length]; });
+  events.filter(e => e.type === 'cme' && !e.fired).forEach((e, i) => { if (cme.length) e.real = cme[i % cme.length]; });
+  if (donkiExtra) return;
+  donkiExtra = true;
+  [[503, 'flare', 1, flare], [504, 'cme', 2, cme], [505, 'flare', 2, flare], [506, 'cme', 3, cme]].forEach(x => {
+    if (x[3][x[2] - 1]) events.push({ day: x[0], hour: x[2], type: x[1], real: x[3][x[2] - 1] });
+  });
+}
+async function loadDonki() {
+  try {
+    const c = JSON.parse(localStorage.getItem('donkiCache') || 'null');
+    if (c && Date.now() - c.t < 6 * 3600 * 1000) { applyDonki(c.flare, c.cme); return; }
+  } catch (e) {}
+  try {
+    const end = new Date(), start = new Date(end.getTime() - DONKI_DAYS * 86400000);
+    const res = await Promise.all([donkiGet('FLR', ymd(start), ymd(end)), donkiGet('CME', ymd(start), ymd(end))]);
+    const flare = parseFlares(res[0]), cme = parseCmes(res[1]);
+    try { localStorage.setItem('donkiCache', JSON.stringify({ t: Date.now(), flare, cme })); } catch (e) {}
+    applyDonki(flare, cme);
+  } catch (e) { console.log('DONKI not reachable, using the archived example.', e); }
+}
+loadDonki();
+
+const _startEventLive = startEvent;
+startEvent = function (e) {
+  _startEventLive(e);
+  const r = e.real || FALLBACK[e.type];
+  if (!r) return;
+  ev.real = r;
+  if (e.type === 'cme') ev.t = Math.round(Math.max(25, Math.min(75, 80 - r.speed / 20)));   // faster CME = less warning time
+  if (e.type === 'flare') ev.t = { C: 12, M: 10, X: 8 }[r.classType[0]] || 10;               // stronger flare = less warning time
+};
+
+function regionText(r) { return r.region ? 'AR ' + r.region : 'unknown region'; }
+function sourceLine(r) { return 'DONKI' + (r.date ? ' ' + r.date : '') + ' (' + (r.live ? 'live' : 'archived') + ')'; }
+
+const _eventLinesLive = eventLines;
+eventLines = function () {
+  if (ev && ev.waiting && ev.real && ev.type === 'flare') {
+    return [
+      { text: 'Alert: Solar flare detected.' },
+      { text: 'Class: ' + ev.real.classType },
+      { text: 'Source: ' + regionText(ev.real) },
+      { text: 'Go inside within ' + Math.ceil(ev.t) + ' seconds.' },
+      { text: sourceLine(ev.real) }];
+  }
+  if (ev && ev.waiting && ev.real && ev.type === 'cme') {
+    const l = [
+      { text: 'Alert: CME detected.' },
+      { text: 'Speed: ' + ev.real.speed + ' km/s' },
+      { text: 'Source: ' + regionText(ev.real) },
+      { text: 'In ' + mmss(Math.ceil(ev.t)) + ': collect crops, go inside, store energy.' }];
+    if (ev.real.mars) l.push({ text: 'DONKI: it reaches Mars.' });
+    l.push({ text: sourceLine(ev.real) });
+    return l;
+  }
+  return _eventLinesLive();
+};
+
+const _newDayLive = newDay;
+newDay = function () {
+  _newDayLive();
+  const facts = OSDR_FACTS.filter(f => f.study && f.text);
+  if (facts.length) { const f = facts[(day - START_DAY) % facts.length]; dayNotes.push('Real science (OSDR ' + f.study + '): ' + f.text); }
+};
+
+const DEBRIEF_TIP = {
+  'You were caught outside.': 'During flares and CMEs, crews shelter early because the warning time is short.',
+  'You ran out of energy.': 'Power is a budget. Stopping the panels protects them, but it drains your reserve.',
+  'You ran out of oxygen.': 'Life support comes first. Making oxygen takes power, so every power choice affects it.',
+  'You starved.': 'Food has to be grown, stored, and eaten before it spoils.'
+};
+function drawDebrief() {
+  ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(0, 0, 960, 540);
+  const x = 170, y = 60, w = 620, h = 420;
+  panel(x, y, w, h);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#3b2412';
+  ctx.font = 'bold 24px "Courier New", monospace';
+  ctx.fillText('MISSION DEBRIEF', x + w / 2, y + 34);
+  ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.fillText('You lasted until day ' + day + '.', x + w / 2, y + 74);
+  ctx.textAlign = 'left'; ctx.font = '14px "Courier New", monospace';
+  let cy = y + 112;
+  const block = (head, text) => {
+    ctx.font = 'bold 15px "Courier New", monospace'; ctx.fillStyle = '#7a3a14'; ctx.fillText(head, x + 28, cy); cy += 22;
+    ctx.font = '14px "Courier New", monospace'; ctx.fillStyle = '#3b2412';
+    wrapLines([{ text }], w - 56).forEach(l => { ctx.fillText(l.text, x + 28, cy); cy += 19; });
+    cy += 12;
+  };
+  block('What ended the mission', gameOverReason || 'The mission ended.');
+  block('What real mission planners learn', DEBRIEF_TIP[gameOverReason] || 'Every choice costs something, and planners balance power, air, and food.');
+  block('Real NASA data in this game', 'Solar flares and CMEs: NASA DONKI database. Dust protection: NASA electrodynamic dust shield research.');
+  ctx.textAlign = 'center'; ctx.font = 'bold 15px "Courier New", monospace'; ctx.fillStyle = '#3b2412';
+  ctx.fillText('Click or press Enter to try again', x + w / 2, y + h - 26);
+}
+const _drawLive = draw;
+draw = function () {
+  _drawLive();
+  if (gameOver) drawDebrief();
+};
+window.addEventListener('click', e => { if (gameOver && e.target === canvas) location.reload(); }, true);
+window.addEventListener('keydown', e => { if (gameOver && e.key === 'Enter') location.reload(); }, true);
+// ================= END LIVE DONKI =================
+
+// ================= TRAINER GUIDE (paste below the DONKI block, above "let last = performance.now();") =================
+const guide = { open: false, page: 0 };
+const GUIDE_TABS = ['Solar flare', 'CME', 'Dust storm', 'Words to know'];
+
+const GUIDE = [
+  [
+    { h: 'What is it?', t: 'A sudden flash of light and energy from the Sun. It starts near busy patches called active regions.' },
+    { h: 'Why does it matter?', t: 'The flash reaches us within minutes. Some flares are followed by fast particles that can harm astronauts and electronics.' },
+    { h: 'What do you do?', t: 'Go inside your house before the timer ends, then stay inside until the danger is over.' },
+    { h: 'Real NASA data', t: 'NASA DONKI lists real flares and gives each a class: A, B, C, M, or X. Each class is ten times stronger than the one before.' }
+  ],
+  [
+    { h: 'What is it?', t: 'A CME (coronal mass ejection) is a giant cloud of charged particles thrown out by the Sun, often from an active region (AR).' },
+    { h: 'Why does it matter?', t: 'It is slower than a flare, taking hours to days to arrive, so scientists can forecast it. Strong ones can disturb electronics and power systems.' },
+    { h: 'What do you do?', t: 'Collect all ripe crops, go inside, and store energy (stop the solar panels) before the timer ends.' },
+    { h: 'Real NASA data', t: 'DONKI scientists estimate each CME\'s speed, from a few hundred to over 2,000 km/s, and the region of the Sun it came from.' }
+  ],
+  [
+    { h: 'What is it?', t: 'Wind lifts fine Martian dust into the air. A dust storm can cover a small area or a whole planet and last days to weeks.' },
+    { h: 'Why does it matter?', t: 'Dust blocks sunlight, so solar panels make much less power. It also settles on panels and equipment.' },
+    { h: 'What do you do?', t: 'Collect food, store energy, attach the electrodynamic dust shield to the solar panels, and repair the greenhouse at the ! marks.' },
+    { h: 'Real NASA research', t: 'NASA is developing electrodynamic dust shields. They use electric fields to push dust off surfaces without touching them.' }
+  ]
+];
+
+const GLOSSARY = [
+  ['Solar flare', 'A sudden flash of light and energy from the Sun.'],
+  ['CME', 'Coronal mass ejection: a giant cloud of charged particles from the Sun.'],
+  ['Active region (AR)', 'A busy patch of the Sun where flares and CMEs often start.'],
+  ['Radiation', 'Energy and fast particles that can harm people and electronics.'],
+  ['Sol', 'One day on Mars: about 24 hours and 39 minutes.'],
+  ['Electrodynamic dust shield', 'Electric fields that push dust off a surface.'],
+  ['DONKI', "NASA's Space Weather Database Of Notifications, Knowledge, Information."]
+];
+
+const GX = 130, GY = 24, GW = 700, GH = 492;
+const guideBtn = { x: 12, y: 48, w: 150, h: 30 };
+function guideTabRect(i) { return { x: GX + 20 + i * 167, y: GY + 54, w: 158, h: 32 }; }
+function guideCloseRect() { return { x: GX + GW - 42, y: GY + 10, w: 30, h: 30 }; }
+function guideBtnVisible() {
+  return !gameOver && !dash.open && !guide.open && !dayOver && !ask && !(ev && (ev.waiting || ev.phase === 'done'));
+}
+function openGuide() {
+  if (ev && { flare: 0, cme: 1, dust: 2 }[ev.type] !== undefined) guide.page = { flare: 0, cme: 1, dust: 2 }[ev.type];
+  guide.open = true;
+}
+
+function drawGuide() {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, 960, 540);
+  panel(GX, GY, GW, GH);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#3b2412';
+  ctx.font = 'bold 22px "Courier New", monospace';
+  ctx.fillText('Trainer Guide', GX + 22, GY + 30);
+  const c = guideCloseRect();
+  ctx.fillStyle = '#c8402a'; ctx.fillRect(c.x, c.y, c.w, c.h);
+  ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(c.x, c.y, c.w, c.h);
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = 'bold 18px Arial';
+  ctx.fillText('X', c.x + c.w / 2, c.y + c.h / 2 + 1);
+  GUIDE_TABS.forEach((name, i) => {
+    const r = guideTabRect(i);
+    ctx.fillStyle = guide.page === i ? '#6a9a1f' : '#f3e3c3'; ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = guide.page === i ? '#1d2a05' : '#3b2412'; ctx.font = 'bold 14px "Courier New", monospace';
+    ctx.fillText(name, r.x + r.w / 2, r.y + r.h / 2);
+  });
+  let y = GY + 112;
+  ctx.textAlign = 'left';
+  if (guide.page < 3) {
+    GUIDE[guide.page].forEach(s => {
+      ctx.font = 'bold 16px "Courier New", monospace'; ctx.fillStyle = '#7a3a14';
+      ctx.fillText(s.h, GX + 24, y); y += 22;
+      ctx.font = '14px "Courier New", monospace'; ctx.fillStyle = '#3b2412';
+      wrapLines([{ text: s.t }], GW - 48).forEach(l => { ctx.fillText(l.text, GX + 24, y); y += 19; });
+      y += 12;
+    });
+  } else {
+    GLOSSARY.forEach(g => {
+      ctx.font = 'bold 15px "Courier New", monospace'; ctx.fillStyle = '#7a3a14';
+      ctx.fillText(g[0], GX + 24, y); y += 20;
+      ctx.font = '14px "Courier New", monospace'; ctx.fillStyle = '#3b2412';
+      wrapLines([{ text: g[1] }], GW - 48).forEach(l => { ctx.fillText(l.text, GX + 24, y); y += 19; });
+      y += 8;
+    });
+  }
+  ctx.textAlign = 'center'; ctx.fillStyle = '#6b4a2a'; ctx.font = 'italic 12px "Courier New", monospace';
+  ctx.fillText('Left / Right arrows change page. Esc or X closes. Flare and CME data: NASA DONKI.', GX + GW / 2, GY + GH - 16);
+}
+
+function drawGuideBtn() {
+  panel(guideBtn.x, guideBtn.y, guideBtn.w, guideBtn.h);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#3b2412';
+  ctx.font = 'bold 15px "Courier New", monospace';
+  ctx.fillText('Guide (H)', guideBtn.x + guideBtn.w / 2, guideBtn.y + guideBtn.h / 2);
+}
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (guide.open) {
+    if (k === 'escape' || k === 'h') guide.open = false;
+    if (k === 'arrowleft' || k === 'a') guide.page = (guide.page + 3) % 4;
+    if (k === 'arrowright' || k === 'd') guide.page = (guide.page + 1) % 4;
+    e.stopImmediatePropagation(); e.preventDefault();
+    return;
+  }
+  if (k === 'h' && !gameOver && !dash.open && !dayOver) { openGuide(); e.stopImmediatePropagation(); }
+}, true);
+
+window.addEventListener('click', e => {
+  if (e.target !== canvas) return;
+  const p = canvasPoint(e);
+  if (guide.open) {
+    if (inRect(p, guideCloseRect())) guide.open = false;
+    GUIDE_TABS.forEach((n, i) => { if (inRect(p, guideTabRect(i))) guide.page = i; });
+    e.stopImmediatePropagation();
+    return;
+  }
+  if (guideBtnVisible() && inRect(p, guideBtn)) { openGuide(); e.stopImmediatePropagation(); }
+}, true);
+
+const _eventLinesGuide = eventLines;
+eventLines = function () {
+  const lines = _eventLinesGuide();
+  if (ev && ev.waiting) lines.push({ text: 'Press H to learn more.' });
+  return lines;
+};
+
+const _updateGuide = update;
+update = function (dt) {
+  if (guide.open) return;
+  _updateGuide(dt);
+};
+
+const _drawGuide = draw;
+draw = function () {
+  _drawGuide();
+  if (guide.open) drawGuide();
+  else if (guideBtnVisible()) drawGuideBtn();
+};
+// ================= END TRAINER GUIDE =================
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
