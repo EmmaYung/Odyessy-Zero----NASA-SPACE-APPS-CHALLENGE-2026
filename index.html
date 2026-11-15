@@ -1547,49 +1547,11 @@ draw = function () {
 };
 // ================= END POWER GRID DAMAGE =================
 
-  // ================= HOW TO PLAY TUTORIAL (paste ABOVE the "TRAINER GUIDE" block) =================
+// ================= HOW TO PLAY TUTORIAL (visual) (paste ABOVE the "TRAINER GUIDE" block) =================
 const TUT = { open: false, page: 0, seen: false };
 try { TUT.seen = localStorage.getItem('tutSeen') === '1'; } catch (e) {}
 
-const TUT_TABS = ['Basics', 'Outside', 'Food', 'House', 'Dangers'];
-const TUT_PAGES = [
-  [
-    { h: 'Goal', t: 'Survive on Mars. Every day: finish your tasks, eat, and keep your energy and oxygen up.' },
-    { h: 'Move', t: 'Arrow keys or W A S D. Click an object to use it when you are standing close to it.' },
-    { h: 'Weather app', t: 'Click the icon at the bottom left (or press R). Tabs: Weather, Tasks, Warning, Keys.' },
-    { h: 'Labels', t: 'Press I to outline and name everything you can use. Press I again to hide them.' },
-    { h: 'Help', t: 'T opens this tutorial. H opens the Trainer Guide, which explains the science.' }
-  ],
-  [
-    { h: 'Greenhouse', t: 'The dome on the left. Walk into its door at the bottom to go inside.' },
-    { h: 'House', t: 'The big building on the right. Walk into its door at the bottom to go inside.' },
-    { h: 'Solar panels', t: 'Top right. Click them (stand close) to check output. They charge your energy.' },
-    { h: 'Power cords', t: 'Cords link the panels to the house. A CME or dust storm snaps them if you do not store energy.' },
-    { h: 'Space suit', t: 'You wear it outside and take it off inside the house. Walk off the bottom edge of a room to leave it.' }
-  ],
-  [
-    { h: 'Pick crops', t: 'In the greenhouse, click a plant that shows 100% to pick it. Your basket holds 5.' },
-    { h: 'Bin', t: 'In the house, click the bin to empty your basket into it. Picked food rots, so check the days.' },
-    { h: 'Rotting', t: 'Lettuce lasts 3 days, tomato 2, sweet potato 8. A cooked meal lasts 2 days.' },
-    { h: 'Kitchen', t: 'Click the kitchen counter. Cook a recipe (costs 3% energy) or Eat.' },
-    { h: 'Eating', t: 'Each day eat 1 cooked meal or 2 raw crops. Skip two days in a row and you starve.' }
-  ],
-  [
-    { h: 'Oxygen tank', t: 'The small tank, top left. Click it to refill (5 seconds, 4% energy). Do it every day.' },
-    { h: 'Energy storage', t: 'The big tank on the left. Click it to store energy and STOP the solar panels.' },
-    { h: 'Restart panels', t: 'Click the big tank again when it is safe. Stopped panels drain energy fast and nothing recharges.' },
-    { h: 'Bed', t: 'Walk up to the bed and answer Yes to sleep. A new day starts and your plants grow.' },
-    { h: 'Bin and kitchen', t: 'The bin is on the right side of the room. The kitchen counter is at the bottom right.' }
-  ],
-  [
-    { h: 'Solar flare', t: 'Go inside the house before the timer ends, then stay inside until it is over.' },
-    { h: 'CME', t: 'Pick all ripe crops, go inside, and store energy (stop the panels). Restart them afterwards.' },
-    { h: 'Dust storm', t: 'Pick crops, store energy, click the panels to attach the dust shield, fix the ! marks.' },
-    { h: 'Energy', t: 'Solar power charges it and the base uses 3% every hour. At 0% the mission ends.' },
-    { h: 'Oxygen', t: 'If you have not refilled it after about 1 minute, you get 10 seconds to do it.' }
-  ]
-];
-
+const TUT_TABS = ['Basics', 'Outside', 'House', 'Greenhouse', 'Dangers'];
 const TX = 130, TY = 24, TW = 700, TH = 492;
 const tutBtn = { x: 12, y: 84, w: 150, h: 30 };
 function tutTabRect(i) { return { x: TX + 20 + i * 135, y: TY + 54, w: 128, h: 32 }; }
@@ -1598,6 +1560,153 @@ function tutBtnVisible() {
   return !gameOver && !dash.open && !TUT.open && !guide.open && !dayOver && !ask && !(ev && (ev.waiting || ev.phase === 'done'));
 }
 function openTut() { TUT.open = true; TUT.seen = true; try { localStorage.setItem('tutSeen', '1'); } catch (e) {} }
+
+// ---- a label with an arrow pointing at a spot on the picture ----
+function tutCallout(k, ox, oy, tx, ty, lx, ly, text) {
+  const t = performance.now() / 1000;
+  const px = ox + tx * k, py = oy + ty * k;
+  const lines = text.split('\n');
+  ctx.font = 'bold 12px "Courier New", monospace';
+  const w = Math.max.apply(null, lines.map(l => ctx.measureText(l).width)) + 14, h = lines.length * 15 + 8;
+  const bx = Math.max(ox + 4, Math.min(ox + 640 - w - 4, ox + lx * k - w / 2));
+  const by = Math.max(oy + 4, Math.min(oy + 360 - h - 4, oy + ly * k - h / 2));
+  const sx = Math.max(bx, Math.min(bx + w, px)), sy = Math.max(by, Math.min(by + h, py));
+  const ang = Math.atan2(py - sy, px - sx);
+  ctx.strokeStyle = '#ffe14a'; ctx.fillStyle = '#ffe14a'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(px - Math.cos(ang) * 6, py - Math.sin(ang) * 6); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(px - Math.cos(ang) * 4, py - Math.sin(ang) * 4);
+  ctx.lineTo(px - Math.cos(ang - 0.45) * 15, py - Math.sin(ang - 0.45) * 15);
+  ctx.lineTo(px - Math.cos(ang + 0.45) * 15, py - Math.sin(ang + 0.45) * 15); ctx.closePath(); ctx.fill();
+  ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, py, 12 + Math.sin(t * 4) * 3, 0, 6.28); ctx.stroke();
+  ctx.fillStyle = 'rgba(16,21,43,0.93)'; ctx.fillRect(bx, by, w, h);
+  ctx.strokeStyle = '#ffe14a'; ctx.lineWidth = 2; ctx.strokeRect(bx, by, w, h);
+  ctx.fillStyle = '#ffe14a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  lines.forEach((l, i) => ctx.fillText(l, bx + w / 2, by + 4 + 7.5 + i * 15));
+}
+
+// ---- a scaled copy of the real picture, with arrows ----
+function drawTutScene(which) {
+  const k = 640 / 960, ox = TX + 30, oy = TY + 104;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(ox, oy, 640, 360); ctx.clip();
+  ctx.translate(ox, oy); ctx.scale(k, k);
+  ctx.fillStyle = '#b3b3b3'; ctx.fillRect(0, 0, 960, 540);
+  if (which === 'outside') {
+    if (bg.complete && bg.naturalWidth) ctx.drawImage(bg, 0, 0, 960, 540);
+    if (appImg.complete && appImg.naturalWidth) ctx.drawImage(appImg, appIcon.x, appIcon.y, appIcon.w, appIcon.h);
+  } else if (which === 'house') {
+    if (houseEmptyImg.complete && houseEmptyImg.naturalWidth) ctx.drawImage(houseEmptyImg, 0, 0, 960, 540);
+  } else {
+    if (soilImg.complete && soilImg.naturalWidth) ctx.drawImage(soilImg, 0, 0, 960, 540);
+    const mx = mouse.x, my = mouse.y; mouse.x = -999; mouse.y = -999;
+    drawPlants();
+    mouse.x = mx; mouse.y = my;
+  }
+  ctx.restore();
+  ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(ox, oy, 640, 360);
+
+  const C = (x, y, lx, ly, text) => tutCallout(k, ox, oy, x, y, lx, ly, text);
+  if (which === 'outside') {
+    const gd = greenhouseDoor, hd = houseDoorZone, sp = mid(solarRects[1]);
+    C(gd[0] + gd[2] / 2, gd[1] + gd[3] / 2, 250, 440, 'Greenhouse door\nwalk in');
+    C(hd[0] + hd[2] / 2, hd[1] + hd[3] / 2, 640, 420, 'House door\nwalk in');
+    C(sp.x, sp.y, 430, 75, 'Solar panels\nclick to check');
+    C(571, 190, 430, 195, 'Power cords\nkeep them safe');
+    C(appIcon.x + appIcon.w / 2, appIcon.y + appIcon.h / 2, 260, 500, 'Weather app (R)\ntasks, weather, warnings');
+  } else if (which === 'house') {
+    const o = mid(oxygenRect), s = mid(storageRect), b = mid(binRect), d = mid(bedRect), c = mid(bowlRect);
+    C(o.x, o.y, 340, 50, 'Oxygen tank\nrefill every day');
+    C(s.x, s.y, 300, 330, 'Energy storage\nstore energy, stop panels');
+    C(b.x, b.y, 790, 460, 'Bin\nstore your food');
+    C(c.x, c.y, 560, 395, 'Kitchen: cook or eat\n1 meal or 2 raw crops a day');
+    C(d.x, d.y, 640, 70, 'Bed\nwalk up to sleep');
+    C(563, 520, 400, 505, 'Exit\nwalk to the bottom');
+  } else {
+    const ripe = plants.find(p => !p.dead && growth(p) >= 1) || plants[0];
+    const young = plants.find(p => !p.dead && growth(p) < 1 && p !== ripe);
+    if (ripe) C(ripe.x, ripe.y, ripe.x < 480 ? ripe.x + 210 : ripe.x - 210, Math.max(70, ripe.y - 70), 'Ripe: shows 100%\nclick to pick it\n(basket holds 5)');
+    if (young) C(young.x, young.y, young.x < 480 ? young.x + 210 : young.x - 210, Math.min(440, young.y + 70), 'Under 100%\nnot ready yet');
+    C(480, 528, 250, 505, 'Exit\nwalk off the bottom');
+  }
+}
+
+function drawKey(x, y, w, h, label) {
+  ctx.fillStyle = '#e9dcc0'; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#c9b88f'; ctx.fillRect(x + 3, y + h - 7, w - 6, 4);
+  ctx.fillStyle = '#3b2412'; ctx.font = 'bold 15px "Courier New", monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, x + w / 2, y + h / 2 - 2);
+}
+function keyLabel(x, y, h, text) {
+  ctx.font = '13px "Courier New", monospace'; ctx.fillStyle = '#3b2412'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const ls = wrapLines([{ text }], 100);
+  ls.forEach((l, i) => ctx.fillText(l.text, x, y + h / 2 - (ls.length - 1) * 8 + i * 16));
+}
+function drawTutBasics() {
+  const x0 = TX + 34;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#7a3a14'; ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.fillText('MOVE', x0, TY + 118);
+  drawKey(x0 + 44, TY + 132, 38, 38, 'W'); drawKey(x0, TY + 174, 38, 38, 'A');
+  drawKey(x0 + 44, TY + 174, 38, 38, 'S'); drawKey(x0 + 88, TY + 174, 38, 38, 'D');
+  ctx.fillStyle = '#3b2412'; ctx.textAlign = 'center'; ctx.font = 'bold 14px "Courier New", monospace';
+  ctx.fillText('or', x0 + 152, TY + 193);
+  const ax = x0 + 178;
+  drawKey(ax + 44, TY + 132, 38, 38, '\u25B2'); drawKey(ax, TY + 174, 38, 38, '\u25C0');
+  drawKey(ax + 44, TY + 174, 38, 38, '\u25BC'); drawKey(ax + 88, TY + 174, 38, 38, '\u25B6');
+  const mx = x0 + 400, my = TY + 126;   // mouse
+  ctx.fillStyle = '#e9dcc0'; ctx.fillRect(mx, my, 44, 66);
+  ctx.fillStyle = '#ec6a3f'; ctx.fillRect(mx + 2, my + 2, 20, 26);
+  ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(mx, my, 44, 66);
+  ctx.beginPath(); ctx.moveTo(mx, my + 30); ctx.lineTo(mx + 44, my + 30); ctx.moveTo(mx + 22, my); ctx.lineTo(mx + 22, my + 30); ctx.stroke();
+  ctx.textAlign = 'left'; ctx.fillStyle = '#7a3a14'; ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.fillText('CLICK', mx + 60, my + 14);
+  ctx.fillStyle = '#3b2412'; ctx.font = '13px "Courier New", monospace';
+  ctx.fillText('objects you are', mx + 60, my + 36); ctx.fillText('standing near', mx + 60, my + 54);
+  ctx.textAlign = 'center'; ctx.font = 'bold 14px "Courier New", monospace';
+  ctx.fillText('Walk close to an object, then click it.', TX + TW / 2, TY + 246);
+  const row = (y, list) => {
+    let x = x0;
+    list.forEach(it => {
+      const w = it[0].length > 3 ? 72 : it[0].length > 1 ? 56 : 38;
+      drawKey(x, y, w, 38, it[0]); keyLabel(x + w + 10, y, 38, it[1]); x += 168;
+    });
+  };
+  row(TY + 282, [['I', 'Show names of objects'], ['R', 'Weather app'], ['H', 'Trainer guide'], ['T', 'How to play']]);
+  row(TY + 350, [['Y / N', 'Yes or No'], ['Enter', 'Continue'], ['Esc', 'Close a window']]);
+}
+
+function drawTutDangers() {
+  const cards = [
+    { t: 'SOLAR FLARE', c: '#e8a417', s: ['1. Go inside the house', '2. Stay inside until it ends'] },
+    { t: 'CME', c: '#d9642b', s: ['1. Pick all ripe crops', '2. Go inside the house', '3. Store energy: stop the solar panels', '4. Restart the panels later'] },
+    { t: 'DUST STORM', c: '#b8854a', s: ['1. Pick crops', '2. Store energy', '3. Click the panels: dust shield', '4. Fix the ! marks'] }
+  ];
+  cards.forEach((cd, i) => {
+    const x = TX + 28 + i * 220, y = TY + 112, w = 208, h = 330, cx = x + w / 2;
+    ctx.fillStyle = '#efe0bf'; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = cd.c; ctx.fillRect(x, y, w, 100);
+    ctx.strokeStyle = '#4a2e18'; ctx.beginPath(); ctx.moveTo(x, y + 100); ctx.lineTo(x + w, y + 100); ctx.stroke();
+    ctx.strokeStyle = '#fff6d0'; ctx.fillStyle = '#fff6d0'; ctx.lineWidth = 3;
+    if (i === 0) {
+      ctx.beginPath(); ctx.arc(cx, y + 50, 16, 0, 6.28); ctx.fill();
+      for (let a = 0; a < 8; a++) { const r = a * Math.PI / 4; ctx.beginPath(); ctx.moveTo(cx + Math.cos(r) * 24, y + 50 + Math.sin(r) * 24); ctx.lineTo(cx + Math.cos(r) * 38, y + 50 + Math.sin(r) * 38); ctx.stroke(); }
+    } else if (i === 1) {
+      ctx.beginPath(); ctx.arc(cx - 30, y + 50, 14, 0, 6.28); ctx.fill();
+      for (let r = 26; r <= 62; r += 18) { ctx.beginPath(); ctx.arc(cx - 30, y + 50, r, -0.7, 0.7); ctx.stroke(); }
+    } else {
+      for (let j = 0; j < 3; j++) { ctx.beginPath(); ctx.moveTo(cx - 44, y + 32 + j * 18); for (let q = 0; q <= 88; q += 8) ctx.lineTo(cx - 44 + q, y + 32 + j * 18 + Math.sin(q / 9 + j) * 5); ctx.stroke(); }
+    }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#3b2412'; ctx.font = 'bold 17px "Courier New", monospace';
+    ctx.fillText(cd.t, cx, y + 124);
+    ctx.textAlign = 'left'; ctx.font = '14px "Courier New", monospace';
+    let ty = y + 156;
+    cd.s.forEach(s => { wrapLines([{ text: s }], w - 32).forEach(l => { ctx.fillText(l.text, x + 16, ty); ty += 19; }); ty += 8; });
+  });
+  ctx.textAlign = 'center'; ctx.fillStyle = '#3b2412'; ctx.font = 'bold 13px "Courier New", monospace';
+  ctx.fillText('Every day: eat, refill oxygen, and restart the panels when it is safe.', TX + TW / 2, TY + 466);
+}
 
 function drawTut() {
   ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, 960, 540);
@@ -1617,17 +1726,13 @@ function drawTut() {
     ctx.fillStyle = TUT.page === i ? '#1d2a05' : '#3b2412'; ctx.font = 'bold 14px "Courier New", monospace';
     ctx.fillText(name, r.x + r.w / 2, r.y + r.h / 2);
   });
-  let y = TY + 114;
-  ctx.textAlign = 'left';
-  TUT_PAGES[TUT.page].forEach(s => {
-    ctx.font = 'bold 16px "Courier New", monospace'; ctx.fillStyle = '#7a3a14';
-    ctx.fillText(s.h, TX + 24, y); y += 22;
-    ctx.font = '14px "Courier New", monospace'; ctx.fillStyle = '#3b2412';
-    wrapLines([{ text: s.t }], TW - 48).forEach(l => { ctx.fillText(l.text, TX + 24, y); y += 19; });
-    y += 12;
-  });
-  ctx.textAlign = 'center'; ctx.fillStyle = '#6b4a2a'; ctx.font = 'italic 12px "Courier New", monospace';
-  ctx.fillText('Page ' + (TUT.page + 1) + ' of ' + TUT_PAGES.length + '. Left / Right arrows change page. T, Esc or X closes.', TX + TW / 2, TY + TH - 16);
+  if (TUT.page === 0) drawTutBasics();
+  else if (TUT.page === 1) drawTutScene('outside');
+  else if (TUT.page === 2) drawTutScene('house');
+  else if (TUT.page === 3) drawTutScene('greenhouse');
+  else drawTutDangers();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#6b4a2a'; ctx.font = 'italic 12px "Courier New", monospace';
+  ctx.fillText('Page ' + (TUT.page + 1) + ' of ' + TUT_TABS.length + '. Left / Right arrows change page. T, Esc or X closes.', TX + TW / 2, TY + TH - 14);
 }
 
 function drawTutBtn() {
@@ -1641,8 +1746,8 @@ window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (TUT.open) {
     if (k === 't' || k === 'escape') TUT.open = false;
-    if (k === 'arrowleft' || k === 'a') TUT.page = (TUT.page + TUT_PAGES.length - 1) % TUT_PAGES.length;
-    if (k === 'arrowright' || k === 'd') TUT.page = (TUT.page + 1) % TUT_PAGES.length;
+    if (k === 'arrowleft' || k === 'a') TUT.page = (TUT.page + TUT_TABS.length - 1) % TUT_TABS.length;
+    if (k === 'arrowright' || k === 'd') TUT.page = (TUT.page + 1) % TUT_TABS.length;
     e.stopImmediatePropagation(); e.preventDefault();
     return;
   }
