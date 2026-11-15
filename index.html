@@ -1549,8 +1549,8 @@ draw = function () {
 
 // ================= HOW TO PLAY TUTORIAL (visual) (paste ABOVE the "TRAINER GUIDE" block) =================
 const TUT = { open: false, page: 0, seen: false };
-try { TUT.seen = localStorage.getItem('tutSeen') === '1'; } catch (e) {}
-
+function openTut() { TUT.open = true; TUT.seen = true; }
+  
 const TUT_TABS = ['Basics', 'Outside', 'House', 'Greenhouse', 'Dangers'];
 const TX = 130, TY = 24, TW = 700, TH = 492;
 const tutBtn = { x: 12, y: 84, w: 150, h: 30 };
