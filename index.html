@@ -1454,6 +1454,99 @@ window.addEventListener('click', e => { if (gameOver && e.target === canvas) loc
 window.addEventListener('keydown', e => { if (gameOver && e.key === 'Enter') location.reload(); }, true);
 // ================= END LIVE DONKI =================
 
+  // ================= POWER GRID DAMAGE (paste BETWEEN "END LIVE DONKI" and "TRAINER GUIDE") =================
+let cordsBroken = false;
+
+function breakCords() {
+  if (cordsBroken) return;
+  cordsBroken = true;
+  toast = { text: 'The power cords snapped! No more solar power.', t: 5 };
+}
+
+// If the panels were not stopped (energy not stored) when a CME or dust storm hit, the cords to the house snap.
+const _updateEventGrid = updateEvent;
+updateEvent = function (dt) {
+  const wasDead = solarDead, was = ev && ev.phase, type = ev && ev.type;
+  _updateEventGrid(dt);
+  if (!ev) return;
+  if (type === 'dust' && was !== 'done' && ev.phase === 'done' && !solarStopped) {
+    solarDead = true;
+    ev.result.push('The power cords to the house snapped.');
+    breakCords();
+  } else if (!wasDead && solarDead && !solarStopped) {
+    breakCords();
+  }
+};
+
+function spark(x, y, t, s) {
+  if (Math.floor(t * 7 + x) % 3) return;
+  ctx.strokeStyle = '#ffe14a'; ctx.lineWidth = 2;
+  for (let a = 0; a < 6; a++) {
+    const r = a * Math.PI / 3 + t;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(r) * s, y + Math.sin(r) * s); ctx.stroke();
+  }
+}
+function smoke(x, y, t, seed) {
+  for (let i = 0; i < 3; i++) {
+    const k = (t * 0.5 + i / 3 + seed) % 1;
+    ctx.globalAlpha = 0.35 * (1 - k); ctx.fillStyle = '#555';
+    ctx.beginPath(); ctx.arc(x + Math.sin(k * 6 + seed) * 6, y - k * 38, 4 + k * 8, 0, 6.28); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawGridDamage() {
+  const t = performance.now() / 1000;
+  ctx.save();
+  if (solarDead) solarRects.forEach((r, i) => {
+    ctx.fillStyle = 'rgba(15,15,25,0.5)'; ctx.fillRect(r[0], r[1], r[2], r[3]);
+    ctx.strokeStyle = '#d8d8e8'; ctx.lineWidth = 2; ctx.beginPath();
+    ctx.moveTo(r[0] + r[2] * 0.2, r[1]); ctx.lineTo(r[0] + r[2] * 0.4, r[1] + r[3] * 0.4);
+    ctx.lineTo(r[0] + r[2] * 0.3, r[1] + r[3] * 0.7); ctx.lineTo(r[0] + r[2] * 0.55, r[1] + r[3]);
+    ctx.moveTo(r[0] + r[2] * 0.4, r[1] + r[3] * 0.4); ctx.lineTo(r[0] + r[2] * 0.8, r[1] + r[3] * 0.55);
+    ctx.stroke();
+    smoke(r[0] + r[2] / 2, r[1] + r[3] * 0.3, t, i * 0.27);
+  });
+  if (cordsBroken) {
+    // the main cord from the panels to the fuse box: a gap with frayed ends and a burn mark
+    ctx.fillStyle = '#a9451f'; ctx.fillRect(566, 178, 11, 28);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.beginPath(); ctx.ellipse(571, 192, 15, 20, 0, 0, 6.28); ctx.fill();
+    ctx.strokeStyle = '#111'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(571, 160); ctx.lineTo(571, 176); ctx.lineTo(567, 184); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(571, 218); ctx.lineTo(571, 206); ctx.lineTo(576, 198); ctx.stroke();
+    ctx.strokeStyle = '#ff7a1a'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(567, 184); ctx.lineTo(565, 188); ctx.moveTo(576, 198); ctx.lineTo(579, 195); ctx.stroke();
+    spark(571, 191, t, 11);
+    // fuse box: dark, with a blinking red light and smoke
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(559, 219, 22, 60);
+    ctx.fillStyle = Math.floor(t * 2) % 2 ? '#ff2a2a' : '#601010';
+    ctx.beginPath(); ctx.arc(570, 226, 4, 0, 6.28); ctx.fill();
+    smoke(570, 220, t, 0.5);
+    // broken wires between the panels and where the cord enters the house
+    spark(700, 118, t + 1, 9); spark(790, 118, t + 2, 9); spark(604, 334, t + 3, 9);
+  }
+  ctx.restore();
+}
+
+const _drawPlayerGrid = drawPlayer;
+drawPlayer = function () {
+  if (scene === 'outside' && (solarDead || cordsBroken)) drawGridDamage();
+  _drawPlayerGrid();
+};
+
+// "Power grid: DAMAGED" in the top-right status stack
+const _drawGridHud = draw;
+draw = function () {
+  _drawGridHud();
+  if (solarDead && !gameOver && !dash.open && !guide.open && !(ev && (ev.waiting || ev.phase === 'done'))) {
+    panel(758, 164, 190, 26);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = 'bold 13px "Courier New", monospace';
+    ctx.fillStyle = '#b82424';
+    ctx.fillText('Power grid: DAMAGED', 768, 177);
+  }
+};
+// ================= END POWER GRID DAMAGE =================
+
 // ================= TRAINER GUIDE (paste below the DONKI block, above "let last = performance.now();") =================
 const guide = { open: false, page: 0 };
 const GUIDE_TABS = ['Solar flare', 'CME', 'Dust storm', 'Words to know'];
