@@ -1547,7 +1547,80 @@ draw = function () {
 };
 // ================= END POWER GRID DAMAGE =================
 
-// ================= HOW TO PLAY TUTORIAL (visual) (paste ABOVE the "TRAINER GUIDE" block) =================
+  // ================= GAME COVER (paste ABOVE the HOW TO PLAY / TRAINER GUIDE blocks, whichever comes first) =================
+const cover = { open: true, img: new Image(), fade: 0 };
+cover.img.src = 'cover.png';
+cover.img.onerror = () => console.log('Could not load cover.png');
+
+// The O of "zero" (the play button) on the 960x540 canvas: centre x, y and half-width, half-height.
+const COVER_PLAY = { x: 587, y: 371, rx: 48, ry: 58 };
+function overCoverPlay(p) {
+  const dx = (p.x - COVER_PLAY.x) / COVER_PLAY.rx, dy = (p.y - COVER_PLAY.y) / COVER_PLAY.ry;
+  return dx * dx + dy * dy <= 1;
+}
+function startFromCover() { if (!cover.fade) cover.fade = performance.now(); }
+
+window.addEventListener('keydown', e => {
+  if (!cover.open) return;
+  if (e.key === 'Enter' || e.key === ' ') startFromCover();
+  e.stopImmediatePropagation(); e.preventDefault();
+}, true);
+window.addEventListener('click', e => {
+  if (!cover.open) return;
+  if (e.target === canvas && !cover.fade && overCoverPlay(canvasPoint(e))) startFromCover();
+  e.stopImmediatePropagation();
+}, true);
+
+const _updateCover = update;
+update = function (dt) {
+  if (cover.open) return;
+  _updateCover(dt);
+};
+
+const _drawCover = draw;
+draw = function () {
+  _drawCover();
+  if (!cover.open) return;
+  let a = 1;
+  if (cover.fade) {
+    a = 1 - (performance.now() - cover.fade) / 450;
+    if (a <= 0) { cover.open = false; canvas.style.cursor = 'default'; return; }
+  }
+  const t = performance.now() / 1000;
+  const over = !cover.fade && overCoverPlay(mouse);
+  ctx.save();
+  ctx.globalAlpha = a;
+  if (cover.img.complete && cover.img.naturalWidth) {
+    ctx.drawImage(cover.img, 0, 0, 960, 540);
+  } else {
+    ctx.fillStyle = '#d48238'; ctx.fillRect(0, 0, 960, 540);
+    ctx.fillStyle = '#7a3a14'; ctx.font = 'bold 56px "Courier New", monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('ODYSSEY ZERO', 480, 220);
+  }
+  // glowing ring around the O so players know it is a button
+  ctx.strokeStyle = over ? '#fff6d0' : 'rgba(255,246,208,0.65)';
+  ctx.lineWidth = over ? 5 : 3;
+  ctx.beginPath();
+  ctx.ellipse(COVER_PLAY.x, COVER_PLAY.y, COVER_PLAY.rx - 6 + Math.sin(t * 3) * 2 + (over ? 4 : 0), COVER_PLAY.ry - 6 + Math.sin(t * 3) * 2 + (over ? 4 : 0), 0, 0, 6.28);
+  ctx.stroke();
+  // play triangle
+  const s = over ? 1.25 : 1, cx = COVER_PLAY.x + 3, cy = COVER_PLAY.y;
+  ctx.beginPath();
+  ctx.moveTo(cx - 11 * s, cy - 17 * s); ctx.lineTo(cx - 11 * s, cy + 17 * s); ctx.lineTo(cx + 17 * s, cy); ctx.closePath();
+  ctx.fillStyle = over ? '#ffffff' : 'rgba(255,255,255,0.85)'; ctx.fill();
+  ctx.strokeStyle = '#7a3a14'; ctx.lineWidth = 3; ctx.stroke();
+  // hint
+  ctx.globalAlpha = a * (0.65 + 0.35 * Math.sin(t * 3));
+  ctx.fillStyle = '#7a3a14'; ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('Click the O to play  (or press Enter)', 480, 505);
+  ctx.restore();
+  canvas.style.cursor = over ? 'pointer' : 'default';
+};
+// ================= END GAME COVER =================
+  
+// ================= HOW TO PLAY TUTORIAL (visual) =================
 const TUT = { open: false, page: 0, seen: false };
 function openTut() { TUT.open = true; TUT.seen = true; }
   
