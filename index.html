@@ -231,6 +231,7 @@ let lastHour = 0;
 let solarStopped = false;
 let bedArmed = true;
 let showLabels = false;     // press I
+let hudOpen = false;        // V or click the drop-down tab: shows/hides the status bars and the Guide / How to play buttons
 
 // ---- Clock, energy and tasks ----
 const HOUR_SECONDS = 30;      // real seconds per in-game hour
@@ -592,11 +593,11 @@ dashImg.src = 'dashboard.png';
 dashImg.onerror = () => console.log('Could not load dashboard.png');
 
 const dash = { open: true, tab: null, scroll: 0 };
+// Three tabs (the Keys tab was removed), centred under the app header like the original four were.
 const dashTabs = [
-  { id: 'weather', label: 'Weather', x: 42,  w: 70 },
-  { id: 'tasks',   label: 'Tasks',   x: 118, w: 70 },
-  { id: 'warning', label: 'Warning', x: 194, w: 70 },
-  { id: 'keys',    label: 'Keys',    x: 270, w: 70 }
+  { id: 'weather', label: 'Weather', x: 50,  w: 90 },
+  { id: 'tasks',   label: 'Tasks',   x: 146, w: 90 },
+  { id: 'warning', label: 'Warning', x: 242, w: 90 }
 ];
 // Today's weather repeats on a 7-day cycle. Day 1 = index 0. Add or change entries to change it.
 const weatherCycle = [
@@ -639,19 +640,6 @@ function dashLines(tab) {
       { text: n === 0 ? 'Dust storm today!' : 'Dust storm in ' + n + ' day' + (n === 1 ? '' : 's') },
       { text: 'Collect solar power early' }
     ]);
-  }
-  if (tab === 'keys') {
-    return [
-      { text: 'W A S D / arrows: move' },
-      { text: 'I: show what you can interact with' },
-      { text: 'Click: pick crops, use things, press buttons' },
-      { text: 'Y / N: answer yes or no' },
-      { text: 'R: open this app. Esc or the red button closes it' },
-      { text: 'H: open the Trainer Guide' },
-      { text: 'Enter: continue / start the next day' },
-      { text: 'Mouse wheel or W / S: scroll this text' },
-      { text: 'Walk up to the bed: go to sleep' }
-    ];
   }
   return [{ text: 'Choose a category above.' }];
 }
@@ -816,32 +804,34 @@ function panel(x, y, w, h) {
 }
 function drawHud() {
   ctx.textBaseline = 'middle';
-  // Basket (top-left)
-  panel(12, 12, 150, 30);
-  ctx.textAlign = 'left'; ctx.fillStyle = '#3b2412'; ctx.font = 'bold 16px "Courier New", monospace';
-  ctx.fillText('Basket: ' + basket + '/' + BASKET_MAX, 22, 28);
+  if (hudOpen) {   // the drop-down: basket, clock, energy, oxygen and food only show while it is open
+    // Basket (top-left)
+    panel(12, 12, 150, 30);
+    ctx.textAlign = 'left'; ctx.fillStyle = '#3b2412'; ctx.font = 'bold 16px "Courier New", monospace';
+    ctx.fillText('Basket: ' + basket + '/' + BASKET_MAX, 22, 28);
 
-  // Clock and energy (top-right)
-  panel(960 - 12 - 190, 12, 190, 30);
-  ctx.textAlign = 'center'; ctx.fillStyle = '#3b2412'; ctx.font = 'bold 16px "Courier New", monospace';
-  ctx.fillText('Day ' + day + '  ' + clockText(), 960 - 12 - 95, 28);
-  const frac = Math.max(0, Math.min(1, energy / 100));
-  const bx = 960 - 12 - 190, by = 48;
-  panel(bx, by, 190, 30);
-  ctx.fillStyle = '#3b2412'; ctx.fillRect(bx + 8, by + 8, 174, 14);
-  ctx.fillStyle = frac > 0.5 ? '#6a9a1f' : frac > 0.25 ? '#e0b020' : '#c8402a';
-  ctx.fillRect(bx + 8, by + 8, 174 * frac, 14);
-  ctx.textAlign = 'right'; ctx.font = 'bold 11px "Courier New", monospace'; ctx.fillStyle = '#3b2412';
-  ctx.fillText('Energy ' + Math.round(energy) + '%' + (solarStopped ? ' DRAINING' : ''), bx + 190, by + 42);
+    // Clock and energy (top-right)
+    panel(960 - 12 - 190, 12, 190, 30);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#3b2412'; ctx.font = 'bold 16px "Courier New", monospace';
+    ctx.fillText('Day ' + day + '  ' + clockText(), 960 - 12 - 95, 28);
+    const frac = Math.max(0, Math.min(1, energy / 100));
+    const bx = 960 - 12 - 190, by = 48;
+    panel(bx, by, 190, 30);
+    ctx.fillStyle = '#3b2412'; ctx.fillRect(bx + 8, by + 8, 174, 14);
+    ctx.fillStyle = frac > 0.5 ? '#6a9a1f' : frac > 0.25 ? '#e0b020' : '#c8402a';
+    ctx.fillRect(bx + 8, by + 8, 174 * frac, 14);
+    ctx.textAlign = 'right'; ctx.font = 'bold 11px "Courier New", monospace'; ctx.fillStyle = '#3b2412';
+    ctx.fillText('Energy ' + Math.round(energy) + '%' + (solarStopped ? ' DRAINING' : ''), bx + 190, by + 42);
 
-  // Oxygen and food status (top-right, under the energy bar)
-  panel(bx, 104, 190, 26);
-  ctx.textAlign = 'left'; ctx.font = 'bold 13px "Courier New", monospace';
-  ctx.fillStyle = oxy.alert ? '#b82424' : tasks[2].done ? '#3b2412' : '#8a5a10';
-  ctx.fillText(oxy.alert ? 'Oxygen: LOW! ' + Math.max(0, Math.ceil(oxy.t)) + 's' : tasks[2].done ? 'Oxygen: full' : 'Oxygen: needs refill', bx + 10, 117);
-  panel(bx, 134, 190, 26);
-  ctx.fillStyle = eatenToday >= 1 ? '#3b2412' : '#8a5a10';
-  ctx.fillText(eatenToday >= 1 ? 'Food: full today' : 'Food: ' + Math.round(eatenToday * 100) + '% (eat today)', bx + 10, 147);
+    // Oxygen and food status (top-right, under the energy bar)
+    panel(bx, 104, 190, 26);
+    ctx.textAlign = 'left'; ctx.font = 'bold 13px "Courier New", monospace';
+    ctx.fillStyle = oxy.alert ? '#b82424' : tasks[2].done ? '#3b2412' : '#8a5a10';
+    ctx.fillText(oxy.alert ? 'Oxygen: LOW! ' + Math.max(0, Math.ceil(oxy.t)) + 's' : tasks[2].done ? 'Oxygen: full' : 'Oxygen: needs refill', bx + 10, 117);
+    panel(bx, 134, 190, 26);
+    ctx.fillStyle = eatenToday >= 1 ? '#3b2412' : '#8a5a10';
+    ctx.fillText(eatenToday >= 1 ? 'Food: full today' : 'Food: ' + Math.round(eatenToday * 100) + '% (eat today)', bx + 10, 147);
+  }
 
   if (toast.t > 0) {
     ctx.textAlign = 'center'; ctx.font = 'bold 16px "Courier New", monospace';
@@ -1534,11 +1524,11 @@ drawPlayer = function () {
   _drawPlayerGrid();
 };
 
-// "Power grid: DAMAGED" in the top-right status stack
+// "Power grid: DAMAGED" in the top-right status stack (only shown while the drop-down is open)
 const _drawGridHud = draw;
 draw = function () {
   _drawGridHud();
-  if (solarDead && !gameOver && !dash.open && !guide.open && !(ev && (ev.waiting || ev.phase === 'done'))) {
+  if (hudOpen && solarDead && !gameOver && !dash.open && !guide.open && !(ev && (ev.waiting || ev.phase === 'done'))) {
     panel(758, 164, 190, 26);
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = 'bold 13px "Courier New", monospace';
     ctx.fillStyle = '#b82424';
@@ -1630,7 +1620,7 @@ const tutBtn = { x: 12, y: 84, w: 150, h: 30 };
 function tutTabRect(i) { return { x: TX + 20 + i * 135, y: TY + 54, w: 128, h: 32 }; }
 function tutCloseRect() { return { x: TX + TW - 42, y: TY + 10, w: 30, h: 30 }; }
 function tutBtnVisible() {
-  return !gameOver && !dash.open && !TUT.open && !guide.open && !dayOver && !ask && !(ev && (ev.waiting || ev.phase === 'done'));
+  return hudOpen && !gameOver && !dash.open && !TUT.open && !guide.open && !dayOver && !ask && !(ev && (ev.waiting || ev.phase === 'done'));
 }
 function openTut() { TUT.open = true; TUT.seen = true; try { localStorage.setItem('tutSeen', '1'); } catch (e) {} }
 
@@ -1683,7 +1673,7 @@ function drawTutScene(which) {
     const gd = greenhouseDoor, hd = houseDoorZone, sp = mid(solarRects[1]);
     C(gd[0] + gd[2] / 2, gd[1] + gd[3] / 2, 250, 440, 'Greenhouse door\nwalk in');
     C(hd[0] + hd[2] / 2, hd[1] + hd[3] / 2, 640, 420, 'House door\nwalk in');
-    C(sp.x, sp.y, 430, 75, 'Solar panels\nclick to check');
+    C(sp.x, sp.y, 430, 75, 'Solar panels\nstand close, press E');
     C(571, 190, 430, 195, 'Power cords\nkeep them safe');
     C(appIcon.x + appIcon.w / 2, appIcon.y + appIcon.h / 2, 260, 500, 'Weather app (R)\ntasks, weather, warnings');
   } else if (which === 'house') {
@@ -1697,7 +1687,7 @@ function drawTutScene(which) {
   } else {
     const ripe = plants.find(p => !p.dead && growth(p) >= 1) || plants[0];
     const young = plants.find(p => !p.dead && growth(p) < 1 && p !== ripe);
-    if (ripe) C(ripe.x, ripe.y, ripe.x < 480 ? ripe.x + 210 : ripe.x - 210, Math.max(70, ripe.y - 70), 'Ripe: shows 100%\nclick to pick it\n(basket holds 5)');
+    if (ripe) C(ripe.x, ripe.y, ripe.x < 480 ? ripe.x + 210 : ripe.x - 210, Math.max(70, ripe.y - 70), 'Ripe: shows 100%\nstand close, press E\n(basket holds 5)');
     if (young) C(young.x, young.y, young.x < 480 ? young.x + 210 : young.x - 210, Math.min(440, young.y + 70), 'Under 100%\nnot ready yet');
     C(480, 528, 250, 505, 'Exit\nwalk off the bottom');
   }
@@ -1737,7 +1727,7 @@ function drawTutBasics() {
   ctx.fillStyle = '#3b2412'; ctx.font = '13px "Courier New", monospace';
   ctx.fillText('objects you are', mx + 60, my + 36); ctx.fillText('standing near', mx + 60, my + 54);
   ctx.textAlign = 'center'; ctx.font = 'bold 14px "Courier New", monospace';
-  ctx.fillText('Walk close to an object, then click it.', TX + TW / 2, TY + 246);
+  ctx.fillText('Walk close to an object, then press E (or click it).', TX + TW / 2, TY + 246);
   const row = (y, list) => {
     let x = x0;
     list.forEach(it => {
@@ -1747,6 +1737,7 @@ function drawTutBasics() {
   };
   row(TY + 282, [['I', 'Show names of objects'], ['R', 'Weather app'], ['H', 'Trainer guide'], ['T', 'How to play']]);
   row(TY + 350, [['Y / N', 'Yes or No'], ['Enter', 'Continue'], ['Esc', 'Close a window']]);
+  row(TY + 408, [['E', 'Use the nearby object'], ['V', 'Show / hide status bars']]);
 }
 
 function drawTutDangers() {
@@ -1894,7 +1885,7 @@ const guideBtn = { x: 12, y: 48, w: 150, h: 30 };
 function guideTabRect(i) { return { x: GX + 20 + i * 167, y: GY + 54, w: 158, h: 32 }; }
 function guideCloseRect() { return { x: GX + GW - 42, y: GY + 10, w: 30, h: 30 }; }
 function guideBtnVisible() {
-  return !gameOver && !dash.open && !guide.open && !dayOver && !ask && !(ev && (ev.waiting || ev.phase === 'done'));
+  return hudOpen && !gameOver && !dash.open && !guide.open && !dayOver && !ask && !(ev && (ev.waiting || ev.phase === 'done'));
 }
 function openGuide() {
   if (ev && { flare: 0, cme: 1, dust: 2 }[ev.type] !== undefined) guide.page = { flare: 0, cme: 1, dust: 2 }[ev.type];
@@ -1993,6 +1984,90 @@ draw = function () {
   else if (guideBtnVisible()) drawGuideBtn();
 };
 // ================= END TRAINER GUIDE =================
+
+// ================= DROP-DOWN HUD + NEAR-OBJECT PROMPTS =================
+const hudTab = { x: 170, y: 0, w: 110, h: 20 };   // the little tab at the top that opens/closes the status bars
+
+function tabVisible() {
+  return !cover.open && !gameOver && !dash.open && !TUT.open && !guide.open && !dayOver &&
+         !(ev && (ev.waiting || ev.phase === 'done'));
+}
+function uiFree() { return tabVisible() && !ask && !refill && !debug; }
+function distTo(r) {
+  const cx = player.x, cy = player.y - player.h / 2;
+  return Math.hypot(Math.max(r[0] - cx, 0, cx - (r[0] + r[2])), Math.max(r[1] - cy, 0, cy - (r[1] + r[3])));
+}
+
+// Finds the closest object you can use right now: { rect, label, run }
+function nearbyAction() {
+  if (!uiFree()) return null;
+  let best = null;
+  const add = (rect, d, label, run) => { if (!best || d < best.d) best = { rect, d, label, run, d }; };
+  if (scene === 'house') {
+    [[oxygenRect, tasks[2].done ? 'Oxygen tank (full)' : 'Refill oxygen'],
+     [storageRect, solarStopped ? 'Restart solar panels' : 'Store energy / stop panels'],
+     [binRect, basket > 0 ? 'Empty basket into bin' : 'Check the bin'],
+     [bowlRect, 'Cook / eat']
+    ].forEach(([r, label]) => { const d = distTo(r); if (d <= HOUSE_REACH) add(r, d, label, () => houseClick(mid(r))); });
+  } else if (scene === 'outside') {
+    const shield = ev && ev.type === 'dust' && ev.phase === 'go' && !shieldOn;
+    solarRects.forEach(r => { const d = distTo(r); if (d <= 90) add(r, d, shield ? 'Attach dust shield' : 'Check solar panels', () => outsideClick(mid(r))); });
+    greenhouseMarks.filter(m => !m.fixed).forEach(m => {
+      const d = Math.hypot(player.x - m.x, player.y - m.y);
+      if (d <= 110) add([m.x - 20, m.y - 22, 40, 34], d, 'Repair greenhouse', () => outsideClick({ x: m.x, y: m.y }));
+    });
+  } else if (scene === 'greenhouse') {
+    plants.forEach(pl => {
+      const d = Math.hypot(pl.x - player.x, pl.y - player.h / 2 - player.y);
+      if (d > REACH) return;
+      const q = plantRect(pl), n = vegTypes[pl.t].name;
+      const label = pl.dead ? 'Clear dead ' + n : growth(pl) >= 1 ? 'Pick ' + n : n + ' (' + Math.floor(growth(pl) * 100) + '% grown)';
+      add([q.x, q.y, q.w, q.h], d, label, () => plantClick({ x: q.x + q.w / 2, y: q.y + q.h / 2 }));
+    });
+  }
+  return best;
+}
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'v' && tabVisible()) { hudOpen = !hudOpen; e.stopImmediatePropagation(); return; }
+  if (k === 'e') {
+    const a = nearbyAction();
+    if (a) { a.run(); e.stopImmediatePropagation(); e.preventDefault(); }
+  }
+}, true);
+
+window.addEventListener('click', e => {
+  if (e.target !== canvas || !tabVisible()) return;
+  if (inRect(canvasPoint(e), hudTab)) { hudOpen = !hudOpen; e.stopImmediatePropagation(); }
+}, true);
+
+const _drawPrompt = draw;
+draw = function () {
+  _drawPrompt();
+  if (!tabVisible()) return;
+  // drop-down tab
+  ctx.fillStyle = '#f3e3c3'; ctx.fillRect(hudTab.x, hudTab.y, hudTab.w, hudTab.h);
+  ctx.strokeStyle = '#4a2e18'; ctx.lineWidth = 3; ctx.strokeRect(hudTab.x, hudTab.y, hudTab.w, hudTab.h);
+  ctx.fillStyle = '#3b2412'; ctx.font = 'bold 12px "Courier New", monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText((hudOpen ? '\u25B2 Hide' : '\u25BC Status') + ' (V)', hudTab.x + hudTab.w / 2, hudTab.y + hudTab.h / 2);
+  // near-object prompt
+  const a = nearbyAction();
+  if (!a) return;
+  ctx.save();
+  ctx.setLineDash([5, 4]); ctx.strokeStyle = '#ffe14a'; ctx.lineWidth = 2;
+  ctx.strokeRect(a.rect[0] - 3, a.rect[1] - 3, a.rect[2] + 6, a.rect[3] + 6);
+  ctx.setLineDash([]);
+  ctx.font = 'bold 16px "Courier New", monospace';
+  const text = a.label + ' (E)', w = ctx.measureText(text).width + 36;
+  ctx.fillStyle = 'rgba(16,21,43,0.92)'; ctx.fillRect(480 - w / 2, 448, w, 32);
+  ctx.strokeStyle = '#ffe14a'; ctx.lineWidth = 2; ctx.strokeRect(480 - w / 2, 448, w, 32);
+  ctx.fillStyle = '#ffe14a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, 480, 464);
+  ctx.restore();
+};
+// ================= END DROP-DOWN HUD + PROMPTS =================
 
 let last = performance.now();
 function loop(now) {
