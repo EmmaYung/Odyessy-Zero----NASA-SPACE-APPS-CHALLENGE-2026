@@ -43,10 +43,10 @@ const plants = [
   { t: 'tomato', x: 115, y: 119, age: 40 },      { t: 'lettuce', x: 288, y: 76, age: 40 },
   { t: 'sweetpotato', x: 528, y: 108, age: 99 }, { t: 'tomato', x: 749, y: 184, age: 80 },
   { t: 'lettuce', x: 864, y: 97, age: 39 },      { t: 'sweetpotato', x: 192, y: 281, age: 100 },
-  { t: 'tomato', x: 422, y: 248, age: 20 },      { t: 'lettuce', x: 634, y: 313, age: 30 },
-  { t: 'sweetpotato', x: 845, y: 335, age: 60 }, { t: 'tomato', x: 134, y: 443, age: 64 },
-  { t: 'lettuce', x: 365, y: 421, age: 38 },     { t: 'sweetpotato', x: 557, y: 464, age: 10 },
-  { t: 'tomato', x: 768, y: 454, age: 8 }
+  { t: 'tomato', x: 422, y: 248, age: 78 },      { t: 'lettuce', x: 634, y: 313, age: 30 },
+  { t: 'sweetpotato', x: 845, y: 335, age: 98 }, { t: 'tomato', x: 134, y: 443, age: 38 },
+  { t: 'lettuce', x: 365, y: 421, age: 38 },     { t: 'sweetpotato', x: 557, y: 464, age: 89 },
+  { t: 'tomato', x: 768, y: 454, age: 79 }
 ];
 const MUST_BE_RIPE = true;   // true = you can only pick a vegetable at 100%
 function growth(pl) { return Math.min(1, pl.age / vegTypes[pl.t].days); }   // 0 to 1
